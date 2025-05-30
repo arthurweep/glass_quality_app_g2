@@ -1,0 +1,10 @@
+Flask
+pandas
+numpy
+xgboost
+scikit-learn
+matplotlib
+shap
+scipy
+scikit-optimize
+gunicorn
