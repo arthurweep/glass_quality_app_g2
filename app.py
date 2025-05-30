@@ -75,7 +75,6 @@ def bayes_opt_adjustment(clf, x_orig, feature_names, target_prob=0.5):
             x_adj[i] += kwargs[fn]
         df_adj = pd.DataFrame([x_adj], columns=feature_names)
         prob = clf.predict_proba(df_adj)[0,1]
-        # 目标是使概率>=target_prob，优先最小调整量，若已达阈值则惩罚最小
         penalty = sum(abs(kwargs[fn]) for fn in feature_names)
         if prob >= target_prob:
             return penalty
@@ -155,7 +154,6 @@ def index():
                 clf.fit(X, y, sample_weight=weights)
                 model_cache['clf'] = clf
                 app.logger.info("XGBoost 模型训练完成。")
-                # 自动最优阈值
                 best_threshold = find_best_threshold(clf, X, y, pos_label=ok_label, min_recall=0.95)
                 model_cache['best_thresh'] = best_threshold
                 model_cache['recommended_threshold_text'] = f"ℹ️ 当前最优阈值: {best_threshold:.2f} (OK召回率≥0.95优先，若无则最大召回率)"
@@ -289,8 +287,3 @@ def predict_single_ajax():
     except Exception as e:
         app.logger.error(f"'/predict_single_ajax' 发生错误: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"单次预测过程中发生错误: {str(e)}"}), 500
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.logger.info(f"应用启动中, 监听地址 0.0.0.0, 端口: {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
