@@ -196,25 +196,45 @@
                 predictForm.addEventListener('submit', function (event) {
                     event.preventDefault(); 
                     
+                    // --- 重置UI元素状态 ---
                     if(loader) loader.style.display = 'block';
-                    if(errorDisplay) errorDisplay.style.display = 'none'; 
+                    if(errorDisplay) {
+                        errorDisplay.style.display = 'none';
+                        errorDisplay.textContent = ''; // 清空旧错误
+                    }
                     if(resultsContainer) resultsContainer.style.display = 'none'; 
                     if(shapContentDiv) shapContentDiv.style.display = 'none';
                     if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
                     if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
+                    if(bayesSuggestionContainer) bayesSuggestionContainer.textContent = ''; // 清空旧建议
+
 
                     const formData = new FormData(predictForm);
+                    const formActionUrl = predictForm.action; // 获取表单的action URL
+
+                    console.log("发起 AJAX 请求到:", formActionUrl); // 添加日志，检查URL是否正确
                     
-                    fetch(predictForm.action, {
+                    fetch(formActionUrl, { // 使用获取到的URL
                         method: 'POST',
                         body: formData
                     })
                     .then(response => {
+                        console.log("AJAX 响应状态:", response.status); // 记录响应状态
                         if (!response.ok) {
-                            return response.json().then(errData => {
-                                throw new Error(errData.error || `HTTP error! status: ${response.status}`);
-                            }).catch(() => {
-                                throw new Error(`HTTP error! status: ${response.status}`);
+                            // 尝试从响应体获取错误信息
+                            return response.text().then(text => { // 先获取文本，因为不确定是不是JSON
+                                let errorMsg = `HTTP error! status: ${response.status}, message: ${text}`;
+                                try { // 尝试解析为JSON
+                                    const errData = JSON.parse(text);
+                                    if (errData && errData.error) {
+                                        errorMsg = errData.error;
+                                    }
+                                } catch (e) {
+                                    // 不是JSON，直接用文本
+                                    console.warn("响应不是有效的JSON:", text);
+                                }
+                                console.error("AJAX 响应错误:", errorMsg);
+                                throw new Error(errorMsg);
                             });
                         }
                         return response.json();
@@ -222,6 +242,7 @@
                     .then(data => {
                         if(loader) loader.style.display = 'none';
                         resultsContainer.style.display = 'block';
+                        console.log("AJAX 成功接收数据:", data);
 
                         if (data.success) {
                             if(errorDisplay) errorDisplay.style.display = 'none';
@@ -261,9 +282,10 @@
                             }
                         } else { 
                             if(errorDisplay) {
-                                errorDisplay.textContent = data.error || '发生未知错误。';
+                                errorDisplay.textContent = data.error || '后端处理失败，但未提供具体错误信息。';
                                 errorDisplay.style.display = 'block';
                             }
+                            // 清理旧的预测结果内容
                             if(inputDataDisplay) inputDataDisplay.innerHTML = '';
                             if(probDisplay) probDisplay.textContent = 'N/A';
                             if(labelDisplay) labelDisplay.textContent = 'N/A';
@@ -276,10 +298,10 @@
                         if(loader) loader.style.display = 'none';
                         if(resultsContainer) resultsContainer.style.display = 'block'; 
                         if(errorDisplay) {
-                             errorDisplay.textContent = '请求失败: ' + error.message;
+                             errorDisplay.textContent = '请求失败: ' + error.message; // 显示更具体的错误
                              errorDisplay.style.display = 'block';
                         }
-                        console.error('Fetch Error:', error);
+                        console.error('Fetch API 请求本身发生错误:', error);
                     });
                 });
             }
