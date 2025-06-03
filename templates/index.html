@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XGBoost 模型分析与预测</title>
+    <title>XGBoost 模型分析与预测 - 汽车玻璃质量</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { padding-top: 20px; padding-bottom: 20px; font-family: 'DejaVu Sans', Arial, sans-serif; }
@@ -14,26 +14,36 @@
         .table-responsive { margin-top: 1rem; }
         .sticky-form { position: -webkit-sticky; position: sticky; top: 20px; }
         .loader {
-            border: 5px solid #f3f3f3;
-            border-top: 5px solid #3498db;
+            border: 5px solid #f3f3f3; /* Light grey */
+            border-top: 5px solid #3498db; /* Blue */
             border-radius: 50%;
             width: 30px;
             height: 30px;
             animation: spin 1s linear infinite;
             margin: 10px auto;
-            display: none;
+            display: none; /* 初始隐藏 */
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
+        }
+        #bayes-suggestion-container {
+             white-space: pre-wrap; /* 保留换行和空格 */
+             margin-top: 1rem;
+             padding: 10px;
+             background-color: #f8f9fa;
+             border: 1px solid #dee2e6;
+             border-radius: .25rem;
+             font-family: Consolas, "Courier New", monospace; /* 等宽字体更适合显示建议 */
+             font-size: 0.9em;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="text-center mb-4">
-            <h1>XGBoost 模型训练、分析与预测</h1>
-            <p class="lead">上传CSV文件进行训练, 查看性能, 并对单一样本进行预测和SHAP分析。</p>
+            <h1>XGBoost 模型训练、分析与预测 (汽车玻璃质量控制)</h1>
+            <p class="lead">上传CSV文件进行训练, 查看模型在当前最优阈值下的性能, 并对单一样本进行预测、SHAP分析及获取调整建议。</p>
         </div>
 
         {% if error_message %}
@@ -52,7 +62,7 @@
                         <label for="file">请选择包含 'OK_NG' 列 (0表示不合格, 1表示合格) 以及其他数值型特征的 CSV 文件:</label>
                         <input type="file" class="form-control-file" id="file" name="file" accept=".csv" required>
                     </div>
-                    <button type="submit" class="btn btn-primary">上传并处理</button>
+                    <button type="submit" class="btn btn-primary">上传并训练模型</button>
                 </form>
             </div>
         </div>
@@ -65,17 +75,17 @@
         <div class="row mt-3">
             <div class="col-md-7">
                 <div class="card">
-                    <div class="card-header">📊 模型性能与阈值扫描</div>
+                    <div class="card-header">📊 模型性能与最优阈值</div>
                     <div class="card-body">
                         {% if base64_perf_plot %}
-                            <img src="data:image/png;base64,{{ base64_perf_plot }}" alt="性能图" class="shap-plot">
+                            <img src="data:image/png;base64,{{ base64_perf_plot }}" alt="性能图 (英文标签)" class="shap-plot">
                         {% else %}
                             <p class="text-muted">性能图未生成。</p>
                         {% endif %}
-                        <h3 class="mt-3">推荐阈值与指标</h3>
+                        <h3 class="mt-3">自动最优阈值说明</h3>
                         <p>{{ recommended_threshold_text | safe if recommended_threshold_text else '阈值信息未生成。' }}</p>
                         {% if best_recommendation_html %}
-                            <h4>当前阈值说明:</h4>
+                            <!-- <h4>当前阈值说明:</h4> -->
                             <div class="table-responsive">{{ best_recommendation_html | safe }}</div>
                         {% endif %}
                          <h4>最优阈值下的性能指标:</h4>
@@ -90,10 +100,10 @@
                 </div>
 
                 <div class="card mt-4">
-                    <div class="card-header">📊 全局特征重要性 (平均绝对 SHAP 值)</div>
+                    <div class="card-header">📊 全局特征重要性 (SHAP 平均绝对值)</div>
                     <div class="card-body">
                         {% if base64_global_shap_plot %}
-                            <img src="data:image/png;base64,{{ base64_global_shap_plot }}" alt="全局 SHAP 图" class="shap-plot">
+                            <img src="data:image/png;base64,{{ base64_global_shap_plot }}" alt="全局 SHAP 图 (英文标签)" class="shap-plot">
                         {% else %}
                             <p class="text-muted">全局 SHAP 图未生成。</p>
                         {% endif %}
@@ -104,27 +114,28 @@
             <div class="col-md-5">
                 <div class="sticky-form">
                     <div class="card">
-                        <div class="card-header">🔍 单一样本预测与 SHAP 分析</div>
+                        <div class="card-header">🔍 单一样本预测、SHAP分析与调整建议</div>
                         <div class="card-body">
                             <form id="predict-single-form" method="post" action="{{ url_for('predict_single_ajax') }}">
                                 {% if form_inputs %}
                                     {% for feature in form_inputs %}
                                     <div class="form-group">
-                                        <label for="{{ feature }}">{{ feature }}:</label>
+                                        <label for="feature-{{ loop.index0 }}">{{ feature }}:</label>
                                         <input type="number" step="any" class="form-control form-control-sm" 
                                                id="feature-{{ loop.index0 }}" name="{{ feature }}"
                                                value="{{ default_values.get(feature, '') if default_values else '' }}" required>
                                     </div>
                                     {% endfor %}
-                                    <button type="submit" class="btn btn-success btn-block">判断是否合格 + 分析原因</button>
+                                    <button type="submit" class="btn btn-success btn-block">预测合格性、分析原因并获取调整建议</button>
                                     <div class="loader" id="prediction-loader"></div>
                                 {% else %}
-                                    <p class="text-muted">请先上传并成功处理一个CSV文件以启用此功能。</p>
+                                    <p class="text-muted">请先上传并成功训练模型以启用此功能。</p>
                                 {% endif %}
                             </form>
                         </div>
                     </div>
 
+                    <!-- 单样本预测结果显示区域 -->
                     <div id="single-prediction-results-container" class="card mt-4" style="display: none;">
                         <div class="card-header">📋 单一样本分析结果</div>
                         <div class="card-body">
@@ -132,20 +143,29 @@
                             <h5>输入参数:</h5>
                             <div class="table-responsive" id="single-pred-input-data"></div>
                             <p><strong>预测概率 (OK类):</strong> <span id="single-pred-prob">N/A</span></p>
-                            <p><strong>所用分类阈值:</strong> <span id="single-pred-threshold">{{ current_fixed_threshold | default(0.5) }}</span></p>
-                            <p><strong>最终判断:</strong> <span id="single-pred-label">N/A</span></p>
-                            <div id="shap-analysis-content">
+                            <p><strong>所用分类阈值 (自动最优):</strong> <span id="single-pred-threshold">{{ current_best_threshold | default('N/A') }}</span></p>
+                            <p><strong>最终判断:</strong> <span id="single-pred-label" style="font-weight:bold;">N/A</span></p>
+                            
+                            <!-- SHAP 分析内容 (仅不合格时显示) -->
+                            <div id="shap-analysis-content" style="display: none;">
                                 <h5 class="mt-3">Top 影响因子 (SHAP + 概率影响):</h5>
                                 <div class="table-responsive" id="single-pred-shap-table"></div>
                                 <h5 class="mt-3">参数贡献图 (Waterfall):</h5>
                                 <div id="single-pred-shap-waterfall">
-                                    <img src="" alt="SHAP Waterfall 图" class="shap-plot" style="display: none;">
+                                    <img src="" alt="SHAP Waterfall 图 (英文标签)" class="shap-plot" style="display: none;">
                                 </div>
                             </div>
-                            <div id="shap-pass-message" class="mt-3 text-success" style="display: none;">
-                                预测为合格, 不展示SHAP分析。
+                            
+                            <!-- 合格提示 -->
+                             <div id="shap-pass-message" class="mt-3 text-success" style="display: none;">
+                                预测为合格, 不展示SHAP分析和调整建议。
                             </div>
-                            <div id="bayes-suggestion-container" style="white-space: pre-wrap; margin-top: 1rem; font-weight: bold; color: #d9534f;"></div>
+
+                            <!-- 贝叶斯优化建议 (仅不合格时显示) -->
+                            <div id="bayes-suggestion-container-wrapper" style="display:none;">
+                                <h5 class="mt-4">💡 调整建议 (贝叶斯优化):</h5>
+                                <div id="bayes-suggestion-container"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -156,4 +176,122 @@
 
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const predictForm = document.getElementById('predict-single-form');
+            const resultsContainer = document.getElementById('single-prediction-results-container');
+            const loader = document.getElementById('prediction-loader');
+            
+            const errorDisplay = document.getElementById('single-pred-error-message');
+            const inputDataDisplay = document.getElementById('single-pred-input-data');
+            const probDisplay = document.getElementById('single-pred-prob');
+            const thresholdDisplay = document.getElementById('single-pred-threshold'); // 这个会从后端获取
+            const labelDisplay = document.getElementById('single-pred-label');
+            
+            const shapContentDiv = document.getElementById('shap-analysis-content');
+            const shapTableDisplay = document.getElementById('single-pred-shap-table');
+            const shapWaterfallImg = document.querySelector('#single-pred-shap-waterfall img');
+            const shapPassMessageDiv = document.getElementById('shap-pass-message');
+            
+            const bayesSuggestionWrapper = document.getElementById('bayes-suggestion-container-wrapper');
+            const bayesSuggestionContainer = document.getElementById('bayes-suggestion-container');
+
+            if (predictForm) {
+                predictForm.addEventListener('submit', function (event) {
+                    event.preventDefault(); 
+                    
+                    if(loader) loader.style.display = 'block';
+                    if(errorDisplay) errorDisplay.style.display = 'none'; // 清除旧错误
+                    if(resultsContainer) resultsContainer.style.display = 'none'; // 先隐藏旧结果
+                    if(shapContentDiv) shapContentDiv.style.display = 'none';
+                    if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
+                    if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
+
+
+                    const formData = new FormData(predictForm);
+                    
+                    fetch(predictForm.action, {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(errData => {
+                                throw new Error(errData.error || `HTTP error! status: ${response.status}`);
+                            }).catch(() => {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if(loader) loader.style.display = 'none';
+                        resultsContainer.style.display = 'block';
+
+                        if (data.success) {
+                            if(errorDisplay) errorDisplay.style.display = 'none';
+                            
+                            if(inputDataDisplay) inputDataDisplay.innerHTML = data.input_data_html || '<p class="text-muted">无输入数据。</p>';
+                            if(probDisplay) probDisplay.textContent = data.prob_ok || 'N/A';
+                            if(thresholdDisplay) thresholdDisplay.textContent = data.threshold_used || 'N/A'; // 更新为后端返回的当前阈值
+                            if(labelDisplay) labelDisplay.textContent = data.label || 'N/A';
+                            
+                            // 根据是否不合格 (is_ng) 来显示SHAP和贝叶斯建议
+                            if (data.is_ng) {
+                                if(shapContentDiv) shapContentDiv.style.display = 'block';
+                                if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
+                                if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'block';
+
+                                if(shapTableDisplay) shapTableDisplay.innerHTML = data.shap_table_html || '<p class="text-muted">SHAP 表未生成。</p>';
+                                if (data.shap_waterfall_plot_base64) {
+                                    if(shapWaterfallImg) {
+                                        shapWaterfallImg.src = 'data:image/png;base64,' + data.shap_waterfall_plot_base64;
+                                        shapWaterfallImg.style.display = 'block';
+                                    }
+                                } else {
+                                    if(shapWaterfallImg) shapWaterfallImg.style.display = 'none';
+                                    document.querySelector('#single-pred-shap-waterfall').innerHTML = '<p class="text-muted">Waterfall 图未生成。</p>';
+                                }
+                                
+                                if (bayesSuggestionContainer) {
+                                    if (data.bayes_suggestion) {
+                                        bayesSuggestionContainer.textContent = data.bayes_suggestion;
+                                    } else {
+                                        bayesSuggestionContainer.textContent = '未能生成调整建议。';
+                                    }
+                                }
+                            } else { // 如果是合格
+                                if(shapContentDiv) shapContentDiv.style.display = 'none';
+                                if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'block';
+                                if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
+                            }
+                        } else { // AJAX请求本身失败或后端返回 success: false
+                            if(errorDisplay) {
+                                errorDisplay.textContent = data.error || '发生未知错误。';
+                                errorDisplay.style.display = 'block';
+                            }
+                            // 清理旧的预测结果内容
+                            if(inputDataDisplay) inputDataDisplay.innerHTML = '';
+                            if(probDisplay) probDisplay.textContent = 'N/A';
+                            if(labelDisplay) labelDisplay.textContent = 'N/A';
+                            if(shapContentDiv) shapContentDiv.style.display = 'none';
+                            if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
+                            if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
+                        }
+                    })
+                    .catch(error => {
+                        if(loader) loader.style.display = 'none';
+                        if(resultsContainer) resultsContainer.style.display = 'block';
+                        if(errorDisplay) {
+                             errorDisplay.textContent = '请求失败: ' + error.message;
+                             errorDisplay.style.display = 'block';
+                        }
+                        console.error('Fetch Error:', error);
+                    });
+                });
+            }
+        });
+    </script>
+</body>
+</html>
