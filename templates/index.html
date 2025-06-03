@@ -2,19 +2,22 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>工业质检分析系统</title>
+    <title>工业质检分析系统 - 完整版</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { padding-top: 20px; }
-        .container { max-width: 800px; }
-        .mt-2 { margin-top: 1rem; }
-        .mt-4 { margin-top: 2rem; }
-        #suggestion-box { display: none; }
+        .container { max-width: 1200px; }
+        .feature-importance { font-size: 0.9em; }
+        .shap-analysis { background-color: #f8f9fa; padding: 10px; border-radius: 5px; }
+        .positive-contrib { color: #28a745; }
+        .negative-contrib { color: #dc3545; }
+        pre { white-space: pre-wrap; }
     </style>
 </head>
 <body>
 <div class="container">
-    <h2 class="mb-4">工业质检分析系统</h2>
+    <h2 class="mb-4">工业质检分析系统 - 完整版</h2>
+    
     {% if error_message %}
         <div class="alert alert-danger">{{ error_message }}</div>
     {% endif %}
@@ -28,32 +31,84 @@
             </form>
             {% if filename %}
                 <div class="mt-2 text-success">已上传文件: {{ filename }}</div>
+                {% if current_best_threshold %}
+                    <div class="mt-1 text-info">最优阈值: {{ "%.2f"|format(current_best_threshold) }}</div>
+                {% endif %}
             {% endif %}
         </div>
     </div>
 
     {% if show_results %}
-    <div class="card mb-4">
-        <div class="card-header">单样本预测与优化建议</div>
-        <div class="card-body">
-            <form id="predict-form">
-                {% for feature in form_inputs %}
-                <div class="form-group">
-                    <label>{{ feature }}</label>
-                    <input type="number" step="any" name="{{ feature }}" class="form-control"
-                        value="{{ default_values[feature]|default('') }}" required>
+    <div class="row">
+        <!-- 左侧：特征重要性 -->
+        <div class="col-md-6">
+            {% if feature_importance_plot %}
+            <div class="card mb-4">
+                <div class="card-header">模型特征重要性</div>
+                <div class="card-body">
+                    <img src="data:image/png;base64,{{ feature_importance_plot }}" class="img-fluid" alt="特征重要性图">
                 </div>
-                {% endfor %}
-                <button type="submit" class="btn btn-success">预测并给出建议</button>
-            </form>
-            <div id="result" class="mt-4"></div>
-            <div id="suggestion-box" class="alert alert-info mt-2">
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- 右侧：单样本预测 -->
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">单样本预测与详细分析</div>
+                <div class="card-body">
+                    <form id="predict-form">
+                        {% for feature in form_inputs %}
+                        <div class="form-group">
+                            <label>{{ feature }}</label>
+                            <input type="number" step="any" name="{{ feature }}" class="form-control"
+                                value="{{ default_values[feature]|default('') }}" required>
+                        </div>
+                        {% endfor %}
+                        <button type="submit" class="btn btn-success">预测并分析</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 预测结果展示区域 -->
+    <div id="results-section" style="display: none;">
+        <div class="card mb-4">
+            <div class="card-header">预测结果</div>
+            <div class="card-body">
+                <div id="basic-result"></div>
+            </div>
+        </div>
+        
+        <!-- 特征重要性分析 -->
+        <div class="card mb-4">
+            <div class="card-header">特征重要性分析</div>
+            <div class="card-body">
+                <div id="importance-analysis"></div>
+            </div>
+        </div>
+        
+        <!-- SHAP分析（仅不合格时显示） -->
+        <div id="shap-section" class="card mb-4" style="display: none;">
+            <div class="card-header">SHAP分析 - 判断依据详解</div>
+            <div class="card-body">
+                <div id="shap-table"></div>
+                <div id="waterfall-plot" class="mt-3"></div>
+            </div>
+        </div>
+        
+        <!-- 优化建议 -->
+        <div id="suggestion-section" class="card mb-4" style="display: none;">
+            <div class="card-header">优化建议</div>
+            <div class="card-body">
                 <pre id="suggestion-text"></pre>
             </div>
         </div>
     </div>
     {% endif %}
 </div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     var form = document.getElementById('predict-form');
@@ -61,32 +116,66 @@ document.addEventListener('DOMContentLoaded', function() {
         form.addEventListener('submit', function(e){
             e.preventDefault();
             var formData = new FormData(form);
+            
             fetch('/predict_single_ajax', {
                 method: 'POST',
                 body: formData
             })
             .then(r => r.json())
             .then(data => {
-                let resultBox = document.getElementById('result');
-                let suggestionBox = document.getElementById('suggestion-box');
-                let suggestionText = document.getElementById('suggestion-text');
                 if(data.success){
-                    resultBox.innerHTML = `<b>预测概率:</b> ${data.prob_ok} <br>
-                                           <b>所用阈值:</b> ${data.threshold_used} <br>
-                                           <b>最终判断:</b> ${data.label}`;
-                    if(data.bayes_suggestion){
-                        suggestionText.textContent = data.bayes_suggestion;
-                        suggestionBox.style.display = '';
-                    }else{
-                        suggestionBox.style.display = 'none';
+                    // 显示基本结果
+                    document.getElementById('basic-result').innerHTML = `
+                        <h5>预测结果</h5>
+                        <p><strong>预测概率:</strong> ${data.prob_ok}</p>
+                        <p><strong>所用阈值:</strong> ${data.threshold_used}</p>
+                        <p><strong>最终判断:</strong> ${data.label}</p>
+                    `;
+                    
+                    // 显示特征重要性
+                    let importanceHtml = '<h5>当前输入的特征重要性排序</h5><table class="table table-sm">';
+                    importanceHtml += '<thead><tr><th>特征</th><th>重要性分数</th><th>当前值</th></tr></thead><tbody>';
+                    data.feature_importance.forEach(item => {
+                        importanceHtml += `<tr><td>${item.feature}</td><td>${item.importance.toFixed(3)}</td><td>${item.current_value.toFixed(2)}</td></tr>`;
+                    });
+                    importanceHtml += '</tbody></table>';
+                    document.getElementById('importance-analysis').innerHTML = importanceHtml;
+                    
+                    // 如果是不合格，显示SHAP分析
+                    if(data.is_ng && data.shap_analysis) {
+                        let shapHtml = '<h5>SHAP值分析 - 每个特征的贡献</h5>';
+                        shapHtml += '<table class="table table-sm"><thead><tr><th>特征</th><th>SHAP值</th><th>当前值</th><th>影响类型</th></tr></thead><tbody>';
+                        data.shap_analysis.forEach(item => {
+                            let className = item.shap_value > 0 ? 'positive-contrib' : 'negative-contrib';
+                            shapHtml += `<tr><td>${item.feature}</td><td class="${className}">${item.shap_value.toFixed(4)}</td><td>${item.current_value.toFixed(2)}</td><td>${item.contribution}</td></tr>`;
+                        });
+                        shapHtml += '</tbody></table>';
+                        
+                        if(data.waterfall_plot) {
+                            shapHtml += '<h5 class="mt-3">SHAP Waterfall图 - 可视化分析</h5>';
+                            shapHtml += `<img src="data:image/png;base64,${data.waterfall_plot}" class="img-fluid" alt="SHAP Waterfall图">`;
+                        }
+                        
+                        document.getElementById('shap-table').innerHTML = shapHtml;
+                        document.getElementById('shap-section').style.display = 'block';
+                        
+                        // 显示建议
+                        if(data.suggestion_text) {
+                            document.getElementById('suggestion-text').textContent = data.suggestion_text;
+                            document.getElementById('suggestion-section').style.display = 'block';
+                        }
+                    } else {
+                        document.getElementById('shap-section').style.display = 'none';
+                        document.getElementById('suggestion-section').style.display = 'none';
                     }
-                }else{
-                    resultBox.innerHTML = `<span class="text-danger">错误: ${data.error}</span>`;
-                    suggestionBox.style.display = 'none';
+                    
+                    document.getElementById('results-section').style.display = 'block';
+                    
+                } else {
+                    alert('错误: ' + (data.error || '未知错误'));
                 }
             }).catch(err => {
-                document.getElementById('result').innerHTML = `<span class="text-danger">请求失败</span>`;
-                document.getElementById('suggestion-box').style.display='none';
+                alert('请求失败');
             });
         });
     }
