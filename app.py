@@ -12,7 +12,7 @@ import shap
 import xgboost as xgb
 from flask import Flask, render_template, request, redirect, url_for, jsonify, make_response
 from scipy.special import expit as sigmoid
-from sklearn.metrics import classification_report, f1_score, recall_score
+from sklearn.metrics import recall_score
 from sklearn.utils.class_weight import compute_sample_weight
 
 app = Flask(__name__)
@@ -52,7 +52,6 @@ def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
     return best_threshold
 
 def quick_suggestion(shap_values, feature_names, current_values, threshold, clf):
-    # 只取前3重要特征
     idxs = np.argsort(-np.abs(shap_values))[:3]
     suggestions = []
     adjusted = current_values.copy()
@@ -143,7 +142,8 @@ def predict_single_ajax():
         prob_ok = clf.predict_proba(df_input)[0, 1]
         pred_label = "✅ 合格 (OK)" if prob_ok >= threshold else "❌ 不合格 (NG)"
         suggestion_text = ""
-        if prob_ok < threshold:
+        is_ng = bool(prob_ok < threshold)
+        if is_ng:
             explainer = shap.Explainer(clf, X_background)
             shap_values = explainer(df_input).values[0]
             current_values = [input_data_dict[fn] for fn in feature_names]
@@ -157,7 +157,7 @@ def predict_single_ajax():
             "label": pred_label,
             "threshold_used": f"{threshold:.2f}",
             "bayes_suggestion": suggestion_text,
-            "is_ng": prob_ok < threshold
+            "is_ng": is_ng
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
