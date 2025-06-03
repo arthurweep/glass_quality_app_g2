@@ -15,9 +15,6 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, m
 from scipy.special import expit as sigmoid
 from sklearn.metrics import classification_report, f1_score, recall_score
 from sklearn.utils.class_weight import compute_sample_weight
-from skopt import gp_minimize
-from skopt.space import Real
-from skopt.utils import use_named_args
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -69,52 +66,50 @@ def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
         app.logger.warning(f"未找到满足最小召回率 {min_recall} 的阈值。选择最大化召回率的阈值: {best_threshold:.2f}")
     return best_threshold
 
-def bayes_opt_adjustment(clf, x_original, feature_names, target_probability_threshold=0.5):
-    app.logger.info(f"开始贝叶斯优化，目标概率阈值: {target_probability_threshold:.2f}")
-    start_time_bayes = time.time()
-
-    adjustment_range = 0.15  # 减少调整范围，从0.2减少到0.15
-    dims = [Real(-adjustment_range, adjustment_range, name=fn) for fn in feature_names]
-
-    @use_named_args(dims)
-    def objective_function(**kwargs_adjustments):
-        x_adjusted = x_original.copy()
-        total_adjustment_magnitude = 0
-        for i, feature_name in enumerate(feature_names):
-            adjustment = kwargs_adjustments[feature_name]
-            x_adjusted[i] += adjustment
-            total_adjustment_magnitude += abs(adjustment)
+def simple_optimization_suggestion(clf, x_original, feature_names, shap_values, target_threshold=0.5):
+    """
+    基于SHAP值的快速优化建议 - 替代复杂的贝叶斯优化
+    """
+    app.logger.info("开始快速优化建议计算...")
+    start_time = time.time()
+    
+    # 基于SHAP值确定调整方向和幅度
+    suggestions = []
+    x_adjusted = x_original.copy()
+    
+    # 按SHAP值绝对值排序，优先调整影响最大的特征
+    shap_importance = [(abs(val), i, val) for i, val in enumerate(shap_values)]
+    shap_importance.sort(reverse=True)
+    
+    total_adjustment_budget = 0.3  # 总调整预算
+    
+    for abs_shap, feature_idx, shap_val in shap_importance[:3]:  # 只调整前3个最重要的特征
+        feature_name = feature_names[feature_idx]
         
-        df_adjusted = pd.DataFrame([x_adjusted], columns=feature_names)
-        predicted_probability_ok = clf.predict_proba(df_adjusted)[0, 1]
-        
-        if predicted_probability_ok >= target_probability_threshold:
-            return total_adjustment_magnitude
+        # 如果SHAP值为负（降低合格概率），我们需要反向调整
+        if shap_val < 0:
+            # 建议增加该特征值
+            adjustment = min(0.1, total_adjustment_budget * 0.4)
+            x_adjusted[feature_idx] += adjustment
+            suggestions.append(f"将 '{feature_name}' 增加 {adjustment:.3f}")
         else:
-            probability_gap_penalty = (target_probability_threshold - predicted_probability_ok) * 10
-            return total_adjustment_magnitude + probability_gap_penalty
-
-    # 大幅减少贝叶斯优化的计算量
-    n_calls_bayes = 10  # 从20进一步减少到10
-    n_random_starts_bayes = 3  # 从5减少到3
-    app.logger.info(f"贝叶斯优化参数: n_calls={n_calls_bayes}, n_random_starts={n_random_starts_bayes}")
-
-    optimization_result = gp_minimize(objective_function, dims, acq_func='EI',
-                                      n_calls=n_calls_bayes, 
-                                      n_random_starts=n_random_starts_bayes, 
-                                      random_state=42)
+            # SHAP值为正但仍不够，可能需要进一步增加
+            adjustment = min(0.05, total_adjustment_budget * 0.2)
+            x_adjusted[feature_idx] += adjustment
+            suggestions.append(f"将 '{feature_name}' 微调 +{adjustment:.3f}")
+        
+        total_adjustment_budget -= abs(adjustment)
+        if total_adjustment_budget <= 0:
+            break
     
-    end_time_bayes = time.time()
-    app.logger.info(f"贝叶斯优化完成，耗时: {end_time_bayes - start_time_bayes:.2f} 秒")
+    # 计算调整后的预测概率
+    df_adjusted = pd.DataFrame([x_adjusted], columns=feature_names)
+    final_prob = clf.predict_proba(df_adjusted)[0, 1]
     
-    best_found_adjustments = optimization_result.x
-    x_final_adjusted = x_original.copy()
-    for i, adj in enumerate(best_found_adjustments):
-        x_final_adjusted[i] += adj
-    df_final_adjusted = pd.DataFrame([x_final_adjusted], columns=feature_names)
-    final_adjusted_probability_ok = clf.predict_proba(df_final_adjusted)[0, 1]
+    end_time = time.time()
+    app.logger.info(f"快速优化建议计算完成，耗时: {end_time - start_time:.2f} 秒")
     
-    return best_found_adjustments, final_adjusted_probability_ok
+    return suggestions, final_prob
 
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def index():
@@ -259,8 +254,15 @@ def index():
 @app.route('/predict_single_ajax', methods=['POST'])
 def predict_single_ajax():
     global model_cache
+    app.logger.info("AJAX POST 请求到 '/predict_single_ajax', 开始单一样本预测...")
+
     if 'clf' not in model_cache or 'best_thresh' not in model_cache:
-        return jsonify({"success": False, "error": "请先上传并处理一个CSV文件, 然后再进行单一样本预测。"}), 400
+        app.logger.warning("'/predict_single_ajax' 错误: 模型或最优阈值未在缓存中找到。")
+        return jsonify({
+            "success": False,
+            "error": "请先上传并成功处理一个CSV文件, 然后再进行单一样本预测。"
+        }), 400
+
     try:
         clf = model_cache['clf']
         threshold = model_cache['best_thresh']
@@ -268,63 +270,111 @@ def predict_single_ajax():
         feature_names = model_cache.get('feature_names')
         ok_label = 1
         ng_label = 0
+
+        if X_background is None or feature_names is None:
+            app.logger.error("'/predict_single_ajax' 错误: 缓存中缺少 X_background 或 feature_names。")
+            return jsonify({
+                "success": False,
+                "error": "内部错误：缺少必要的训练数据信息。"
+            }), 500
+
         input_data_dict = {}
         form_data = request.form
-        for fn in feature_names:
-            val = form_data.get(fn)
-            if val is None or val.strip() == '':
-                return jsonify({"success": False, "error": f"特征 '{fn}' 的值不能为空。", "field": fn}), 400
+        for f_name in feature_names:
+            form_value = form_data.get(f_name)
+            if form_value is None or form_value.strip() == "":
+                app.logger.warning(f"单样本预测表单输入错误: 特征 '{f_name}' 的值为空。")
+                return jsonify({
+                    "success": False,
+                    "error": f"特征 '{f_name}' 的值不能为空。",
+                    "field": f_name
+                }), 400
             try:
-                input_data_dict[fn] = float(val)
+                input_data_dict[f_name] = float(form_value)
             except ValueError:
-                return jsonify({"success": False, "error": f"特征 '{fn}' 的输入无效，请输入数字。当前值: '{val}'", "field": fn}), 400
+                app.logger.warning(f"单样本预测表单输入错误: 特征 '{f_name}' 的值 '{form_value}' 不是有效数字。")
+                return jsonify({
+                    "success": False,
+                    "error": f"特征 '{f_name}' 的输入无效, 请输入一个数字。当前值为: '{form_value}'",
+                    "field": f_name
+                }), 400
+
         df_input = pd.DataFrame([input_data_dict], columns=feature_names)
-        prob_ok = clf.predict_proba(df_input)[:, ok_label][0]
-        pred_label = "✅ 合格 (OK)" if prob_ok >= threshold else "❌ 不合格 (NG)"
-        base64_waterfall = None
-        shap_table_html = None
-        bayes_suggestion = None
-        if prob_ok < threshold:
-            explainer = shap.Explainer(clf, X_background)
-            shap_values = explainer(df_input)
-            base64_waterfall = generate_shap_waterfall_base64(shap_values[0])
-            shap_vals = shap_values.values[0]
-            base_val = shap_values.base_values[0]
-            shap_df = pd.DataFrame({
-                "特征": feature_names,
-                "SHAP值": shap_vals
+        app.logger.info(f"单样本预测输入数据 (AJAX): {df_input.to_dict(orient='records')}")
+
+        prob_ok_array = clf.predict_proba(df_input)[:, ok_label]
+        prob_ok_scalar = prob_ok_array[0] if prob_ok_array.ndim > 0 else prob_ok_array
+        predicted_numeric_label = ok_label if prob_ok_scalar >= threshold else ng_label
+        pred_label_text = "✅ 合格 (OK)" if predicted_numeric_label == ok_label else "❌ 不合格 (NG)"
+        app.logger.info(f"单样本预测概率 (OK): {prob_ok_scalar:.3f}, 使用阈值: {threshold:.2f}, 预测数值标签: {predicted_numeric_label}, 文本标签: {pred_label_text}")
+
+        base64_waterfall_plot_str = None
+        single_pred_shap_table_html_str = None
+        optimization_suggestion_text = None
+
+        if predicted_numeric_label == ng_label:
+            app.logger.info("样本预测为不合格, 开始 SHAP 分析和快速优化建议...")
+            explainer_instance = shap.Explainer(clf, X_background)
+            shap_values_instance = explainer_instance(df_input)
+            base64_waterfall_plot_str = generate_shap_waterfall_base64(shap_values_instance[0])
+
+            shap_values_for_df = shap_values_instance.values[0]
+            base_value_for_df = shap_values_instance.base_values[0]
+            shap_df_data = pd.DataFrame({
+                "Feature": df_input.columns,
+                "SHAP Value": shap_values_for_df,
             })
-            predicted_logit = base_val + np.sum(shap_vals)
-            impacts = [sigmoid(predicted_logit) - sigmoid(predicted_logit - v) for v in shap_vals]
-            shap_df["概率影响"] = impacts
-            shap_df = shap_df.sort_values(by="SHAP值", key=abs, ascending=False).head(5)
-            shap_table_html = shap_df.to_html(classes='table table-sm table-striped table-hover', index=False, float_format='{:.4f}'.format)
-            x_orig = np.array([input_data_dict[fn] for fn in feature_names])
-            best_adj, best_prob = bayes_opt_adjustment(clf, x_orig, feature_names, target_probability_threshold=threshold)
-            suggestion_lines = []
-            for fn, adj in zip(feature_names, best_adj):
-                if abs(adj) > 1e-4:
-                    suggestion_lines.append(f"将特征 '{fn}' 调整 {adj:+.4f}")
-            if suggestion_lines:
-                bayes_suggestion = "建议调整:\n" + "\n".join(suggestion_lines) + f"\n以使预测概率达到阈值，优化后概率约为 {best_prob:.3f}"
+            predicted_logit_for_shap_impact = base_value_for_df + np.sum(shap_values_for_df)
+            impacts = []
+            for _, shap_val_feature in enumerate(shap_values_for_df):
+                impact = sigmoid(predicted_logit_for_shap_impact) - sigmoid(predicted_logit_for_shap_impact - shap_val_feature)
+                impacts.append(impact)
+            shap_df_data["Impact on Probability"] = impacts
+            shap_df_data = shap_df_data.sort_values(by="SHAP Value", key=abs, ascending=False).head(5)
+            single_pred_shap_table_html_str = shap_df_data.to_html(classes='table table-sm table-striped table-hover', index=False, float_format='{:.4f}'.format)
+            app.logger.info("为不合格样本 (AJAX) 生成了 SHAP 分析。")
+
+            # 使用快速优化建议替代贝叶斯优化
+            x_original_for_optimization = np.array([input_data_dict[fn] for fn in feature_names])
+            suggestions, final_optimized_prob = simple_optimization_suggestion(
+                clf, x_original_for_optimization, feature_names, shap_values_for_df, target_threshold=threshold
+            )
+
+            if suggestions:
+                optimization_suggestion_text = "快速优化建议 (基于SHAP分析):\n"
+                optimization_suggestion_text += "\n".join(suggestions)
+                optimization_suggestion_text += f"\n\n预期调整后合格概率: {final_optimized_prob:.3f}"
+                if final_optimized_prob >= threshold:
+                    optimization_suggestion_text += f" (≥ 阈值 {threshold:.2f}, 预期合格)"
+                else:
+                    optimization_suggestion_text += f" (< 阈值 {threshold:.2f}, 可能仍需进一步调整)"
             else:
-                bayes_suggestion = "无法找到有效调整使预测合格。"
-            app.logger.info(f"贝叶斯优化建议生成完毕。调整后概率: {best_prob:.3f}")
+                optimization_suggestion_text = "暂无明确的优化建议。建议检查关键特征参数。"
+
+            app.logger.info(f"快速优化建议生成完毕。预期优化后概率: {final_optimized_prob:.3f}")
+        else:
+            app.logger.info("合格样本 (AJAX), 不进行 SHAP 分析和优化建议。")
+
         model_cache['default_values'] = df_input.iloc[0].to_dict()
+
         return jsonify({
             "success": True,
             "input_data_html": pd.DataFrame([input_data_dict]).to_html(classes='table table-sm table-bordered', index=False, float_format='{:.2f}'.format),
-            "prob_ok": f"{prob_ok:.3f}",
-            "label": pred_label,
+            "prob_ok": f"{prob_ok_scalar:.3f}",
+            "label": pred_label_text,
             "threshold_used": f"{threshold:.2f}",
-            "shap_table_html": shap_table_html,
-            "shap_waterfall_plot_base64": base64_waterfall,
-            "bayes_suggestion": bayes_suggestion,
-            "is_ng": prob_ok < threshold
+            "shap_table_html": single_pred_shap_table_html_str,
+            "shap_waterfall_plot_base64": base64_waterfall_plot_str,
+            "bayes_suggestion": optimization_suggestion_text,
+            "is_ng": predicted_numeric_label == ng_label
         })
+
     except Exception as e:
-        app.logger.error(f"'/predict_single_ajax' 发生错误: {e}", exc_info=True)
-        return jsonify({"success": False, "error": f"单次预测过程中发生错误: {str(e)}"}), 500
+        app.logger.error(f"'/predict_single_ajax' 发生严重错误: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"单次预测过程中发生严重错误: {str(e)}"
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
