@@ -2,6 +2,7 @@ import base64
 import io
 import os
 import logging
+import time # 引入 time 模块用于计时
 
 import matplotlib
 matplotlib.use('Agg') 
@@ -10,7 +11,7 @@ import numpy as np
 import pandas as pd
 import shap
 import xgboost as xgb
-from flask import Flask, render_template, request, redirect, url_for, jsonify, make_response # 添加 make_response
+from flask import Flask, render_template, request, redirect, url_for, jsonify, make_response
 from scipy.special import expit as sigmoid
 from sklearn.metrics import classification_report, f1_score, recall_score
 from sklearn.utils.class_weight import compute_sample_weight
@@ -46,6 +47,7 @@ def generate_shap_waterfall_base64(shap_values_single_instance):
     return fig_to_base64(fig)
 
 def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
+    # ... (此函数保持不变，与您上一版本相同) ...
     probs = clf.predict_proba(X)[:, pos_label] 
     thresholds = np.arange(0.01, 1.0, 0.01) 
     
@@ -70,10 +72,13 @@ def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
                 best_threshold_for_max_recall = thresh
         best_threshold = best_threshold_for_max_recall
         app.logger.warning(f"未找到满足最小召回率 {min_recall} 的阈值。选择最大化召回率的阈值: {best_threshold:.2f} (此时召回率为: {max_found_recall:.2f})")
-        
     return best_threshold
 
+
 def bayes_opt_adjustment(clf, x_original, feature_names, target_probability_threshold=0.5):
+    app.logger.info(f"开始贝叶斯优化，目标概率阈值: {target_probability_threshold:.2f}")
+    start_time_bayes = time.time()
+
     adjustment_range = 0.2 
     dims = [Real(-adjustment_range, adjustment_range, name=fn) for fn in feature_names]
 
@@ -95,8 +100,18 @@ def bayes_opt_adjustment(clf, x_original, feature_names, target_probability_thre
             probability_gap_penalty = (target_probability_threshold - predicted_probability_ok) * 10 
             return total_adjustment_magnitude + probability_gap_penalty
 
+    # --- 修改：减少贝叶斯优化的计算量 ---
+    n_calls_bayes = 20  # 原为50，减少迭代次数
+    n_random_starts_bayes = 5 # 原为10，减少随机起始点
+    app.logger.info(f"贝叶斯优化参数: n_calls={n_calls_bayes}, n_random_starts={n_random_starts_bayes}")
+
     optimization_result = gp_minimize(objective_function, dims, acq_func='EI',
-                                      n_calls=50, n_random_starts=10, random_state=42)
+                                      n_calls=n_calls_bayes, 
+                                      n_random_starts=n_random_starts_bayes, 
+                                      random_state=42)
+    
+    end_time_bayes = time.time()
+    app.logger.info(f"贝叶斯优化完成，耗时: {end_time_bayes - start_time_bayes:.2f} 秒")
     
     best_found_adjustments = optimization_result.x
     
@@ -108,17 +123,19 @@ def bayes_opt_adjustment(clf, x_original, feature_names, target_probability_thre
     
     return best_found_adjustments, final_adjusted_probability_ok
 
-@app.route('/', methods=['GET', 'POST', 'HEAD']) # 添加 HEAD 方法
+
+@app.route('/', methods=['GET', 'POST', 'HEAD']) 
 def index():
     global model_cache
     app.logger.info(f"访问 '/' 路由, 方法: {request.method}")
 
-    if request.method == 'HEAD': # 处理健康检查的 HEAD 请求
+    if request.method == 'HEAD': 
         response = make_response()
         response.status_code = 200
         return response
 
     if request.method == 'GET':
+        # ... (GET部分与您上一版本完全相同，此处省略) ...
         for key in ['show_single_pred_results', 'single_pred_input_data_html', 'single_pred_prob',
                     'single_pred_label', 'single_pred_shap_table_html', 'base64_waterfall_plot',
                     'single_pred_error_to_display', 'bayes_suggestion_to_display']: 
@@ -140,8 +157,7 @@ def index():
         return render_template('index.html', **template_vars)
 
     if request.method == 'POST': 
-        # ... (POST部分的其余代码与您上一版本完全相同，此处省略以保持简洁) ...
-        # ... (确保所有中文日志、错误消息、计算逻辑都正确) ...
+        # ... (POST部分的其余代码与您上一版本完全相同，此处省略) ...
         app.logger.info("POST 请求到 '/', 开始处理上传文件...")
         model_cache.clear() 
 
@@ -276,15 +292,15 @@ def index():
              model_cache['error_message_to_display'] = "文件类型无效。请上传 CSV 文件。" 
              return redirect(url_for('index'))
     
-    # 如果不是 'GET', 'POST', 'HEAD' 中的任何一种，则重定向到 index
     app.logger.warning(f"接收到未明确处理的请求方法 '{request.method}' 在 '/' 路由, 重定向到主页。")
-    model_cache.clear() # 对于未知请求也清理缓存
+    model_cache.clear() 
     return redirect(url_for('index'))
 
 
-# --- AJAX 单样本预测路由 ---
 @app.route('/predict_single_ajax', methods=['POST'])
 def predict_single_ajax():
+    # ... (AJAX部分的其余代码与您上一版本完全相同，此处省略以保持简洁) ...
+    # ... (确保所有中文日志、错误消息、计算逻辑都正确) ...
     global model_cache
     app.logger.info("AJAX POST 请求到 '/predict_single_ajax', 开始单一样本预测...")
 
@@ -405,10 +421,8 @@ def predict_single_ajax():
             "error": f"单次预测过程中发生严重错误: {str(e)}" 
         }), 500
 
-# --- 为 `python app.py` 启动添加主程序入口 ---
+
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000)) # Render 会设置 PORT 环境变量
-    # host='0.0.0.0' 确保外部可以访问
-    # debug=False 用于生产/部署环境
+    port = int(os.environ.get("PORT", 5000)) 
     app.logger.info(f"应用启动中 (通过 python app.py), 监听地址 0.0.0.0, 端口: {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
