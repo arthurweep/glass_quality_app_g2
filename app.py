@@ -4,13 +4,13 @@ import os
 import logging
 
 import matplotlib
-matplotlib.use('Agg') # 确保在无GUI环境正常运行
+matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shap
 import xgboost as xgb
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, redirect, url_for, jsonify, make_response # 添加 make_response
 from scipy.special import expit as sigmoid
 from sklearn.metrics import classification_report, f1_score, recall_score
 from sklearn.utils.class_weight import compute_sample_weight
@@ -18,26 +18,20 @@ from skopt import gp_minimize
 from skopt.space import Real
 from skopt.utils import use_named_args
 
-# --- Flask 应用初始化 ---
 app = Flask(__name__)
-app.secret_key = os.urandom(24) # 用于会话管理
+app.secret_key = os.urandom(24) 
 
-# --- 日志配置 ---
 logging.basicConfig(level=logging.INFO)
-app.logger.setLevel(logging.INFO) # 将Flask内置logger也设为INFO
+app.logger.setLevel(logging.INFO) 
 
-# --- 全局缓存，用于存储模型、数据和中间结果 ---
 model_cache = {}
 
-# --- Matplotlib 字体设置 (确保英文显示正常，避免中文乱码警告) ---
 try:
-    matplotlib.rcParams['font.family'] = 'sans-serif' # 通用无衬线字体
-    matplotlib.rcParams['axes.unicode_minus'] = False # 正常显示负号
+    matplotlib.rcParams['font.family'] = 'sans-serif' 
+    matplotlib.rcParams['axes.unicode_minus'] = False 
 except Exception as e:
     app.logger.warning(f"Matplotlib 字体设置警告: {e}")
 
-
-# --- 辅助函数：将 Matplotlib 图像转为 Base64 ---
 def fig_to_base64(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches='tight')
@@ -45,14 +39,12 @@ def fig_to_base64(fig):
     buf.seek(0)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-# --- 辅助函数：生成 SHAP Waterfall 图的 Base64 ---
 def generate_shap_waterfall_base64(shap_values_single_instance):
     fig = plt.figure()
     shap.plots.waterfall(shap_values_single_instance, show=False, max_display=15)
     plt.tight_layout()
     return fig_to_base64(fig)
 
-# --- 辅助函数：自动寻找最优分类阈值 ---
 def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
     probs = clf.predict_proba(X)[:, pos_label] 
     thresholds = np.arange(0.01, 1.0, 0.01) 
@@ -81,7 +73,6 @@ def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
         
     return best_threshold
 
-# --- 辅助函数：贝叶斯优化寻找调整建议 ---
 def bayes_opt_adjustment(clf, x_original, feature_names, target_probability_threshold=0.5):
     adjustment_range = 0.2 
     dims = [Real(-adjustment_range, adjustment_range, name=fn) for fn in feature_names]
@@ -117,12 +108,15 @@ def bayes_opt_adjustment(clf, x_original, feature_names, target_probability_thre
     
     return best_found_adjustments, final_adjusted_probability_ok
 
-
-# --- 主页面路由 (文件上传和结果展示) ---
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET', 'POST', 'HEAD']) # 添加 HEAD 方法
 def index():
     global model_cache
     app.logger.info(f"访问 '/' 路由, 方法: {request.method}")
+
+    if request.method == 'HEAD': # 处理健康检查的 HEAD 请求
+        response = make_response()
+        response.status_code = 200
+        return response
 
     if request.method == 'GET':
         for key in ['show_single_pred_results', 'single_pred_input_data_html', 'single_pred_prob',
@@ -146,6 +140,8 @@ def index():
         return render_template('index.html', **template_vars)
 
     if request.method == 'POST': 
+        # ... (POST部分的其余代码与您上一版本完全相同，此处省略以保持简洁) ...
+        # ... (确保所有中文日志、错误消息、计算逻辑都正确) ...
         app.logger.info("POST 请求到 '/', 开始处理上传文件...")
         model_cache.clear() 
 
@@ -280,9 +276,11 @@ def index():
              model_cache['error_message_to_display'] = "文件类型无效。请上传 CSV 文件。" 
              return redirect(url_for('index'))
     
-    app.logger.warning("接收到未知类型的请求或意外的流程, 重定向到主页。")
-    model_cache.clear()
+    # 如果不是 'GET', 'POST', 'HEAD' 中的任何一种，则重定向到 index
+    app.logger.warning(f"接收到未明确处理的请求方法 '{request.method}' 在 '/' 路由, 重定向到主页。")
+    model_cache.clear() # 对于未知请求也清理缓存
     return redirect(url_for('index'))
+
 
 # --- AJAX 单样本预测路由 ---
 @app.route('/predict_single_ajax', methods=['POST'])
@@ -407,11 +405,10 @@ def predict_single_ajax():
             "error": f"单次预测过程中发生严重错误: {str(e)}" 
         }), 500
 
-# --- 添加此部分以支持 `python app.py` 启动 ---
+# --- 为 `python app.py` 启动添加主程序入口 ---
 if __name__ == '__main__':
-    # Render 会设置 PORT 环境变量。在本地开发时，如果没有设置，则默认为 5000。
-    port = int(os.environ.get("PORT", 5000))
-    # 重要的是 host='0.0.0.0'，这样 Render 才能从外部访问到容器内的应用。
-    # debug=False 推荐用于生产环境，包括 Render 免费版。
+    port = int(os.environ.get("PORT", 5000)) # Render 会设置 PORT 环境变量
+    # host='0.0.0.0' 确保外部可以访问
+    # debug=False 用于生产/部署环境
     app.logger.info(f"应用启动中 (通过 python app.py), 监听地址 0.0.0.0, 端口: {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
