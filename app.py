@@ -29,6 +29,12 @@ def fig_to_base64(fig):
     buf.seek(0)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
+def generate_shap_waterfall_base64(shap_values_single_instance):
+    fig = plt.figure(figsize=(10, 6))
+    shap.plots.waterfall(shap_values_single_instance, show=False, max_display=10)
+    plt.tight_layout()
+    return fig_to_base64(fig)
+
 def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
     probs = clf.predict_proba(X)[:, pos_label]
     thresholds = np.arange(0.01, 1.0, 0.01)
@@ -51,18 +57,20 @@ def find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95):
                 best_threshold = thresh
     return best_threshold
 
-def quick_suggestion(shap_values, feature_names, current_values, threshold, clf):
-    idxs = np.argsort(-np.abs(shap_values))[:3]
-    suggestions = []
-    adjusted = current_values.copy()
-    for idx in idxs:
-        direction = 1 if shap_values[idx] < 0 else -1
-        adj = 0.05 * direction
-        adjusted[idx] += adj
-        suggestions.append(f"{feature_names[idx]}: {current_values[idx]:.2f} → {adjusted[idx]:.2f} (调整 {adj:+.2f})")
-    df_adj = pd.DataFrame([adjusted], columns=feature_names)
-    prob_adj = clf.predict_proba(df_adj)[0, 1]
-    return suggestions, prob_adj
+def generate_feature_importance_plot(clf, feature_names):
+    """生成特征重要性图表"""
+    importance = clf.feature_importances_
+    indices = np.argsort(importance)[::-1]
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(range(len(importance)), importance[indices])
+    ax.set_title('Feature Importance (XGBoost Built-in)')
+    ax.set_xlabel('Features')
+    ax.set_ylabel('Importance Score')
+    ax.set_xticks(range(len(importance)))
+    ax.set_xticklabels([feature_names[i] for i in indices], rotation=45, ha='right')
+    plt.tight_layout()
+    return fig_to_base64(fig)
 
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def index():
@@ -76,7 +84,8 @@ def index():
             form_inputs=model_cache.get('feature_names', []),
             default_values=model_cache.get('default_values', {}),
             error_message=model_cache.pop('error_message_to_display', None),
-            current_best_threshold=model_cache.get('best_thresh', None)
+            current_best_threshold=model_cache.get('best_thresh', None),
+            feature_importance_plot=model_cache.get('feature_importance_plot', None)
         )
     if request.method == 'POST':
         model_cache.clear()
@@ -99,17 +108,25 @@ def index():
                     X[col] = pd.to_numeric(X[col], errors='coerce')
                 X = X.fillna(X.mean())
                 y = pd.to_numeric(df["OK_NG"], errors='coerce').astype(int)
-                model_cache['feature_names'] = list(X.columns)
+                
+                feature_names = list(X.columns)
+                model_cache['feature_names'] = feature_names
                 model_cache['X_train_df_for_explainer'] = X.copy()
+                
                 weights = compute_sample_weight(class_weight={0: 1.0, 1: 2.0}, y=y)
                 clf = xgb.XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.1,
                                         objective="binary:logistic", eval_metric="logloss",
                                         random_state=42, use_label_encoder=False)
                 clf.fit(X, y, sample_weight=weights)
                 model_cache['clf'] = clf
+                
                 best_threshold = find_best_threshold(clf, X, y, pos_label=1, min_recall=0.95)
                 model_cache['best_thresh'] = best_threshold
                 model_cache['default_values'] = X.mean().to_dict()
+                
+                # 生成特征重要性图表
+                model_cache['feature_importance_plot'] = generate_feature_importance_plot(clf, feature_names)
+                
                 model_cache['show_results_from_upload'] = True
                 return redirect(url_for('index'))
             except Exception as e:
@@ -127,39 +144,92 @@ def predict_single_ajax():
     global model_cache
     if 'clf' not in model_cache or 'best_thresh' not in model_cache:
         return jsonify({"success": False, "error": "请先上传并处理训练数据"}), 400
+    
     try:
         clf = model_cache['clf']
         threshold = model_cache['best_thresh']
         X_background = model_cache['X_train_df_for_explainer']
         feature_names = model_cache['feature_names']
+        
         input_data_dict = {}
         for fn in feature_names:
             val = request.form.get(fn)
             if val is None or val.strip() == '':
                 return jsonify({"success": False, "error": f"特征 '{fn}' 的值不能为空。", "field": fn}), 400
             input_data_dict[fn] = float(val)
+        
         df_input = pd.DataFrame([input_data_dict], columns=feature_names)
         prob_ok = clf.predict_proba(df_input)[0, 1]
         pred_label = "✅ 合格 (OK)" if prob_ok >= threshold else "❌ 不合格 (NG)"
-        suggestion_text = ""
+        
         is_ng = bool(prob_ok < threshold)
+        
+        # 获取特征重要性
+        feature_importance = clf.feature_importances_
+        importance_data = []
+        for i, name in enumerate(feature_names):
+            importance_data.append({
+                "feature": name,
+                "importance": float(feature_importance[i]),
+                "current_value": float(input_data_dict[name])
+            })
+        importance_data.sort(key=lambda x: x["importance"], reverse=True)
+        
+        suggestion_text = ""
+        shap_analysis = []
+        waterfall_plot = None
+        
         if is_ng:
+            # SHAP分析
             explainer = shap.Explainer(clf, X_background)
-            shap_values = explainer(df_input).values[0]
-            current_values = [input_data_dict[fn] for fn in feature_names]
-            suggestions, adj_prob = quick_suggestion(shap_values, feature_names, current_values, threshold, clf)
-            suggestion_text = "快速优化建议：\n" + "\n".join(suggestions)
-            suggestion_text += f"\n预期调整后概率: {adj_prob:.3f} "
-            suggestion_text += "(≥阈值)" if adj_prob >= threshold else "(需进一步调整)"
+            shap_values = explainer(df_input)
+            
+            # 生成SHAP waterfall图
+            waterfall_plot = generate_shap_waterfall_base64(shap_values[0])
+            
+            # SHAP值分析
+            shap_vals = shap_values.values[0]
+            base_value = shap_values.base_values[0]
+            
+            for i, name in enumerate(feature_names):
+                shap_analysis.append({
+                    "feature": name,
+                    "shap_value": float(shap_vals[i]),
+                    "current_value": float(input_data_dict[name]),
+                    "contribution": "正面影响" if shap_vals[i] > 0 else "负面影响"
+                })
+            
+            # 按SHAP值绝对值排序
+            shap_analysis.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+            
+            # 生成优化建议
+            suggestions = []
+            for item in shap_analysis[:3]:  # 取前3个最重要的特征
+                if item["shap_value"] < 0:  # 负面影响，建议增加
+                    adj = min(0.1, abs(item["shap_value"]) * 0.1)
+                    new_val = item["current_value"] + adj
+                    suggestions.append(f"建议将 {item['feature']} 从 {item['current_value']:.2f} 调整到 {new_val:.2f} (增加 {adj:.2f})")
+                elif item["shap_value"] > 0 and prob_ok < threshold:  # 正面但仍不够
+                    adj = min(0.05, item["shap_value"] * 0.1)
+                    new_val = item["current_value"] + adj
+                    suggestions.append(f"建议将 {item['feature']} 从 {item['current_value']:.2f} 调整到 {new_val:.2f} (微调 +{adj:.2f})")
+            
+            suggestion_text = "基于SHAP分析的优化建议：\n" + "\n".join(suggestions) if suggestions else "暂无明确优化建议"
+        
         return jsonify({
             "success": True,
             "prob_ok": f"{prob_ok:.3f}",
             "label": pred_label,
             "threshold_used": f"{threshold:.2f}",
-            "bayes_suggestion": suggestion_text,
-            "is_ng": is_ng
+            "is_ng": is_ng,
+            "feature_importance": importance_data,
+            "shap_analysis": shap_analysis,
+            "waterfall_plot": waterfall_plot,
+            "suggestion_text": suggestion_text
         })
+        
     except Exception as e:
+        app.logger.error(f"预测过程出错: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
