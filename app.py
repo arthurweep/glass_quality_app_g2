@@ -4,6 +4,9 @@ import os
 import logging
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import shap
 import xgboost as xgb
 from flask import Flask, render_template, request, redirect, url_for, jsonify, make_response
@@ -37,6 +40,8 @@ def generate_feature_importance_plot(clf, feature_names):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.bar(range(len(importance)), importance[indices])
     ax.set_title('Feature Importance')
+    ax.set_xlabel('Features')
+    ax.set_ylabel('Importance Score')
     ax.set_xticks(range(len(importance)))
     ax.set_xticklabels([feature_names[i] for i in indices], rotation=45, ha='right')
     plt.tight_layout()
@@ -55,7 +60,6 @@ def calculate_precise_adjustment(clf, current_values, shap_values, threshold, fe
     for idx, val in sorted_features:
         feature = feature_names[idx]
         
-        # 计算特征敏感度
         delta = 0.001
         temp_values = current_values.copy()
         temp_values[idx] += delta
@@ -65,12 +69,10 @@ def calculate_precise_adjustment(clf, current_values, shap_values, threshold, fe
         if abs(sensitivity) < 1e-6:
             continue
         
-        # 计算需要调整的量
         needed_change = required_boost / sensitivity
         max_change = 0.2 * abs(current_values[idx])
         needed_change = np.clip(needed_change, -max_change, max_change)
         
-        # 计算预期提升
         expected_gain = sensitivity * needed_change
         
         adjustments[feature] = {
@@ -120,7 +122,11 @@ def index():
                 model_cache['error'] = "缺少OK_NG列"
                 return redirect(url_for('index'))
             
-            X = df.drop("OK_NG", axis=1).fillna(df.mean(numeric_only=True))
+            X = df.drop("OK_NG", axis=1)
+            for col in X.columns:
+                X[col] = pd.to_numeric(X[col], errors='coerce')
+            X = X.fillna(X.mean())
+            
             y = pd.to_numeric(df["OK_NG"], errors='coerce').fillna(0).astype(int)
             
             features = X.columns.tolist()
@@ -128,20 +134,23 @@ def index():
                 n_estimators=150,
                 max_depth=5,
                 learning_rate=0.1,
-                random_state=42
+                random_state=42,
+                use_label_encoder=False
             )
             clf.fit(X, y, sample_weight=compute_sample_weight({0:1, 1:2}, y))
             
-            # 计算模型指标
             preds = clf.predict(X)
+            probs = clf.predict_proba(X)[:, 1]
+            threshold = np.percentile(probs, 95)
+            
             model_metrics = {
                 'trees': clf.n_estimators,
                 'depth': clf.max_depth,
                 'lr': clf.learning_rate,
                 'accuracy': accuracy_score(y, preds),
-                'recall_ok': recall_score(y, preds, pos_label=1),
-                'recall_ng': recall_score(y, preds, pos_label=0),
-                'threshold': np.percentile(clf.predict_proba(X)[:,1], 95)
+                'recall_ok': recall_score(y, preds, pos_label=1, zero_division=0),
+                'recall_ng': recall_score(y, preds, pos_label=0, zero_division=0),
+                'threshold': threshold
             }
             
             model_cache.update({
@@ -171,24 +180,24 @@ def predict():
         features = model_cache['features']
         threshold = model_cache['metrics']['threshold']
         
-        # 获取输入数据
-        input_data = [float(request.form.get(f)) for f in features]
+        input_data = []
+        for f in features:
+            val = request.form.get(f)
+            if val is None or val.strip() == '':
+                return jsonify({'error': f'特征 {f} 不能为空'}), 400
+            input_data.append(float(val))
         
-        # 基础预测
         prob = clf.predict_proba([input_data])[0][1]
         is_ng = bool(prob < threshold)
         
-        # SHAP分析
         explainer = shap.Explainer(clf, model_cache['X_train'])
-        shap_values = explainer.shap_values(np.array([input_data]))[0]
+        shap_values = explainer.shap_values([input_data])[0]
         
-        # 生成调整建议
         adjustments = calculate_precise_adjustment(
             clf, input_data, shap_values, 
             threshold, features
         )
         
-        # 构建响应
         response = {
             'prob': round(prob, 3),
             'threshold': round(threshold, 2),
@@ -200,7 +209,12 @@ def predict():
         
         if is_ng:
             response['waterfall'] = generate_shap_waterfall_base64(
-                shap.Explanation(values=shap_values, base_values=explainer.expected_value[1], data=input_data)
+                shap.Explanation(
+                    values=shap_values, 
+                    base_values=explainer.expected_value, 
+                    data=input_data,
+                    feature_names=features
+                )
             )
         
         return jsonify(response)
