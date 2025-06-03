@@ -115,7 +115,6 @@
                     <div class="card">
                         <div class="card-header">🔍 单一样本预测、SHAP分析与调整建议</div>
                         <div class="card-body">
-                            <!-- 确保 action 指向正确的 AJAX 处理路由 -->
                             <form id="predict-single-form" method="post" action="{{ url_for('predict_single_ajax') }}">
                                 {% if form_inputs %}
                                     {% for feature in form_inputs %}
@@ -175,13 +174,15 @@
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function () {
+            console.log("DOM fully loaded and parsed."); // 确认JS开始执行
+
             const predictForm = document.getElementById('predict-single-form');
             if (!predictForm) {
-                console.error("错误: 未找到 ID 为 'predict-single-form' 的表单元素。");
-                return; // 如果表单不存在，则不继续执行
+                console.error("关键错误: 未找到 ID 为 'predict-single-form' 的表单元素。AJAX提交将无法工作。");
+                return; 
             }
+            console.log("成功获取到 predict-single-form 元素:", predictForm);
 
-            // 获取所有结果显示相关的 DOM 元素
             const resultsContainer = document.getElementById('single-prediction-results-container');
             const loader = document.getElementById('prediction-loader');
             const errorDisplay = document.getElementById('single-pred-error-message');
@@ -196,15 +197,14 @@
             const bayesSuggestionWrapper = document.getElementById('bayes-suggestion-container-wrapper');
             const bayesSuggestionContainer = document.getElementById('bayes-suggestion-container');
 
-            // 检查所有关键的显示元素是否存在
-            if (!resultsContainer || !loader || !errorDisplay || !inputDataDisplay || !probDisplay || !thresholdDisplay || !labelDisplay || !shapContentDiv || !shapTableDisplay || !shapWaterfallImg || !shapPassMessageDiv || !bayesSuggestionWrapper || !bayesSuggestionContainer) {
-                console.error("错误: 一个或多个用于显示结果的 DOM 元素未找到。请检查 HTML 的 ID 是否正确。");
-                // 可以选择不 return，但后续更新可能会失败
-            }
+            // 检查一下是否有关键的显示元素未找到
+            if (!resultsContainer) console.warn("警告: single-prediction-results-container 未找到");
+            if (!loader) console.warn("警告: prediction-loader 未找到");
+            // ... 可以为其他元素添加类似检查
 
             predictForm.addEventListener('submit', function (event) {
                 event.preventDefault(); 
-                console.log("单样本预测表单已提交。");
+                console.log("单样本预测表单提交事件触发。");
 
                 if(loader) loader.style.display = 'block';
                 if(errorDisplay) { errorDisplay.style.display = 'none'; errorDisplay.textContent = ''; }
@@ -218,44 +218,54 @@
                 const formActionUrl = predictForm.action; 
 
                 if (!formActionUrl) {
-                    console.error("错误: 表单的 action URL 未定义。");
+                    console.error("严重错误: 表单的 action URL (提交目标) 未定义或为空。");
                     if(loader) loader.style.display = 'none';
                     if(errorDisplay) {
-                        errorDisplay.textContent = '内部错误：预测请求无法发送 (URL缺失)。';
+                        errorDisplay.textContent = '内部错误：预测请求无法发送 (目标URL缺失)。';
                         errorDisplay.style.display = 'block';
                     }
-                    if(resultsContainer) resultsContainer.style.display = 'block'; // 仍然显示结果区域以展示错误
+                    if(resultsContainer) resultsContainer.style.display = 'block';
                     return;
                 }
-                console.log("准备发起 AJAX 请求到:", formActionUrl);
+                console.log("准备发起 fetch 请求到:", formActionUrl);
                 
                 fetch(formActionUrl, {
                     method: 'POST',
                     body: formData
                 })
                 .then(response => {
-                    console.log("AJAX 响应已收到, 状态码:", response.status);
+                    console.log("Fetch 响应已收到, 状态码:", response.status, "OK:", response.ok);
                     if (!response.ok) {
+                        // 尝试从响应体获取错误信息文本
                         return response.text().then(text => {
-                            let errorMsg = `HTTP 错误! 状态: ${response.status}, 响应体: ${text}`;
+                            let errorToThrow = `HTTP 错误! 状态: ${response.status}.`;
+                            if (text) {
+                                errorToThrow += ` 响应内容: ${text}`;
+                            }
+                             // 尝试解析为JSON以获取更友好的错误信息
                             try {
                                 const errData = JSON.parse(text);
                                 if (errData && errData.error) {
-                                    errorMsg = errData.error;
+                                    errorToThrow = errData.error; // 使用后端提供的错误信息
                                 }
                             } catch (e) {
+                                // 如果不是JSON，则使用前面构造的 errorToThrow
                                 console.warn("后端错误响应不是有效的JSON:", text);
                             }
-                            console.error("AJAX 响应错误详情:", errorMsg);
-                            throw new Error(errorMsg); // 抛出错误以便 catch 处理
+                            console.error("Fetch 响应错误详情:", errorToThrow);
+                            throw new Error(errorToThrow);
                         });
                     }
-                    return response.json(); // 如果 response.ok，则解析为 JSON
+                    // 如果 response.ok，则尝试解析为 JSON
+                    return response.json().catch(err => {
+                        console.error("解析JSON响应失败:", err);
+                        throw new Error("后端返回了成功状态，但响应内容不是有效的JSON。");
+                    });
                 })
                 .then(data => {
                     if(loader) loader.style.display = 'none';
                     if(resultsContainer) resultsContainer.style.display = 'block';
-                    console.log("AJAX 成功接收并解析数据:", data);
+                    console.log("Fetch 成功接收并解析数据:", data);
 
                     if (data.success) {
                         if(errorDisplay) errorDisplay.style.display = 'none';
@@ -274,9 +284,10 @@
                             if (data.shap_waterfall_plot_base64 && shapWaterfallImg) {
                                 shapWaterfallImg.src = 'data:image/png;base64,' + data.shap_waterfall_plot_base64;
                                 shapWaterfallImg.style.display = 'block';
-                            } else if (shapWaterfallImg) {
+                            } else if (shapWaterfallImg) { // 如果没有图片数据，确保隐藏img并显示提示
                                 shapWaterfallImg.style.display = 'none';
-                                document.querySelector('#single-pred-shap-waterfall').innerHTML = '<p class="text-muted">Waterfall 图未生成。</p>';
+                                const waterfallDiv = document.getElementById('single-pred-shap-waterfall');
+                                if (waterfallDiv) waterfallDiv.innerHTML = '<p class="text-muted">Waterfall 图未生成。</p>';
                             }
                             
                             if (bayesSuggestionContainer) {
@@ -296,20 +307,19 @@
                             errorDisplay.textContent = data.error || '后端处理失败，但未提供具体错误信息。';
                             errorDisplay.style.display = 'block';
                         }
-                        // 清理可能已部分填充的旧结果
                         if(inputDataDisplay) inputDataDisplay.innerHTML = '';
                         if(probDisplay) probDisplay.textContent = 'N/A';
                         if(labelDisplay) labelDisplay.textContent = 'N/A';
                     }
                 })
-                .catch(error => { // 这个 catch 处理 fetch 本身的失败 (如网络问题) 或上面 throw 的错误
+                .catch(error => { 
                     if(loader) loader.style.display = 'none';
                     if(resultsContainer) resultsContainer.style.display = 'block'; 
                     if(errorDisplay) {
                          errorDisplay.textContent = '请求失败: ' + error.message; 
                          errorDisplay.style.display = 'block';
                     }
-                    console.error('Fetch API 请求处理链中发生错误:', error);
+                    console.error('Fetch API 请求处理链中发生错误:', error.message, error);
                 });
             });
         });
