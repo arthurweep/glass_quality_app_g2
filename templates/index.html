@@ -115,6 +115,7 @@
                     <div class="card">
                         <div class="card-header">🔍 单一样本预测、SHAP分析与调整建议</div>
                         <div class="card-body">
+                            <!-- 确保 action 指向正确的 AJAX 处理路由 -->
                             <form id="predict-single-form" method="post" action="{{ url_for('predict_single_ajax') }}">
                                 {% if form_inputs %}
                                     {% for feature in form_inputs %}
@@ -175,136 +176,142 @@
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             const predictForm = document.getElementById('predict-single-form');
+            if (!predictForm) {
+                console.error("错误: 未找到 ID 为 'predict-single-form' 的表单元素。");
+                return; // 如果表单不存在，则不继续执行
+            }
+
+            // 获取所有结果显示相关的 DOM 元素
             const resultsContainer = document.getElementById('single-prediction-results-container');
             const loader = document.getElementById('prediction-loader');
-            
             const errorDisplay = document.getElementById('single-pred-error-message');
             const inputDataDisplay = document.getElementById('single-pred-input-data');
             const probDisplay = document.getElementById('single-pred-prob');
             const thresholdDisplay = document.getElementById('single-pred-threshold'); 
             const labelDisplay = document.getElementById('single-pred-label');
-            
             const shapContentDiv = document.getElementById('shap-analysis-content');
             const shapTableDisplay = document.getElementById('single-pred-shap-table');
             const shapWaterfallImg = document.querySelector('#single-pred-shap-waterfall img');
             const shapPassMessageDiv = document.getElementById('shap-pass-message');
-            
             const bayesSuggestionWrapper = document.getElementById('bayes-suggestion-container-wrapper');
             const bayesSuggestionContainer = document.getElementById('bayes-suggestion-container');
 
-            if (predictForm) {
-                predictForm.addEventListener('submit', function (event) {
-                    event.preventDefault(); 
-                    
-                    // --- 重置UI元素状态 ---
-                    if(loader) loader.style.display = 'block';
+            // 检查所有关键的显示元素是否存在
+            if (!resultsContainer || !loader || !errorDisplay || !inputDataDisplay || !probDisplay || !thresholdDisplay || !labelDisplay || !shapContentDiv || !shapTableDisplay || !shapWaterfallImg || !shapPassMessageDiv || !bayesSuggestionWrapper || !bayesSuggestionContainer) {
+                console.error("错误: 一个或多个用于显示结果的 DOM 元素未找到。请检查 HTML 的 ID 是否正确。");
+                // 可以选择不 return，但后续更新可能会失败
+            }
+
+            predictForm.addEventListener('submit', function (event) {
+                event.preventDefault(); 
+                console.log("单样本预测表单已提交。");
+
+                if(loader) loader.style.display = 'block';
+                if(errorDisplay) { errorDisplay.style.display = 'none'; errorDisplay.textContent = ''; }
+                if(resultsContainer) resultsContainer.style.display = 'none'; 
+                if(shapContentDiv) shapContentDiv.style.display = 'none';
+                if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
+                if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
+                if(bayesSuggestionContainer) bayesSuggestionContainer.textContent = '';
+
+                const formData = new FormData(predictForm);
+                const formActionUrl = predictForm.action; 
+
+                if (!formActionUrl) {
+                    console.error("错误: 表单的 action URL 未定义。");
+                    if(loader) loader.style.display = 'none';
                     if(errorDisplay) {
-                        errorDisplay.style.display = 'none';
-                        errorDisplay.textContent = ''; // 清空旧错误
+                        errorDisplay.textContent = '内部错误：预测请求无法发送 (URL缺失)。';
+                        errorDisplay.style.display = 'block';
                     }
-                    if(resultsContainer) resultsContainer.style.display = 'none'; 
-                    if(shapContentDiv) shapContentDiv.style.display = 'none';
-                    if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
-                    if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
-                    if(bayesSuggestionContainer) bayesSuggestionContainer.textContent = ''; // 清空旧建议
-
-
-                    const formData = new FormData(predictForm);
-                    const formActionUrl = predictForm.action; // 获取表单的action URL
-
-                    console.log("发起 AJAX 请求到:", formActionUrl); // 添加日志，检查URL是否正确
-                    
-                    fetch(formActionUrl, { // 使用获取到的URL
-                        method: 'POST',
-                        body: formData
-                    })
-                    .then(response => {
-                        console.log("AJAX 响应状态:", response.status); // 记录响应状态
-                        if (!response.ok) {
-                            // 尝试从响应体获取错误信息
-                            return response.text().then(text => { // 先获取文本，因为不确定是不是JSON
-                                let errorMsg = `HTTP error! status: ${response.status}, message: ${text}`;
-                                try { // 尝试解析为JSON
-                                    const errData = JSON.parse(text);
-                                    if (errData && errData.error) {
-                                        errorMsg = errData.error;
-                                    }
-                                } catch (e) {
-                                    // 不是JSON，直接用文本
-                                    console.warn("响应不是有效的JSON:", text);
+                    if(resultsContainer) resultsContainer.style.display = 'block'; // 仍然显示结果区域以展示错误
+                    return;
+                }
+                console.log("准备发起 AJAX 请求到:", formActionUrl);
+                
+                fetch(formActionUrl, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    console.log("AJAX 响应已收到, 状态码:", response.status);
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            let errorMsg = `HTTP 错误! 状态: ${response.status}, 响应体: ${text}`;
+                            try {
+                                const errData = JSON.parse(text);
+                                if (errData && errData.error) {
+                                    errorMsg = errData.error;
                                 }
-                                console.error("AJAX 响应错误:", errorMsg);
-                                throw new Error(errorMsg);
-                            });
-                        }
-                        return response.json();
-                    })
-                    .then(data => {
-                        if(loader) loader.style.display = 'none';
-                        resultsContainer.style.display = 'block';
-                        console.log("AJAX 成功接收数据:", data);
+                            } catch (e) {
+                                console.warn("后端错误响应不是有效的JSON:", text);
+                            }
+                            console.error("AJAX 响应错误详情:", errorMsg);
+                            throw new Error(errorMsg); // 抛出错误以便 catch 处理
+                        });
+                    }
+                    return response.json(); // 如果 response.ok，则解析为 JSON
+                })
+                .then(data => {
+                    if(loader) loader.style.display = 'none';
+                    if(resultsContainer) resultsContainer.style.display = 'block';
+                    console.log("AJAX 成功接收并解析数据:", data);
 
-                        if (data.success) {
-                            if(errorDisplay) errorDisplay.style.display = 'none';
-                            
-                            if(inputDataDisplay) inputDataDisplay.innerHTML = data.input_data_html || '<p class="text-muted">无输入数据。</p>';
-                            if(probDisplay) probDisplay.textContent = data.prob_ok || 'N/A';
-                            if(thresholdDisplay) thresholdDisplay.textContent = data.threshold_used || 'N/A'; 
-                            if(labelDisplay) labelDisplay.textContent = data.label || 'N/A';
-                            
-                            if (data.is_ng) {
-                                if(shapContentDiv) shapContentDiv.style.display = 'block';
-                                if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
-                                if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'block';
+                    if (data.success) {
+                        if(errorDisplay) errorDisplay.style.display = 'none';
+                        
+                        if(inputDataDisplay) inputDataDisplay.innerHTML = data.input_data_html || '<p class="text-muted">无输入数据。</p>';
+                        if(probDisplay) probDisplay.textContent = data.prob_ok || 'N/A';
+                        if(thresholdDisplay) thresholdDisplay.textContent = data.threshold_used || 'N/A'; 
+                        if(labelDisplay) labelDisplay.textContent = data.label || 'N/A';
+                        
+                        if (data.is_ng) {
+                            if(shapContentDiv) shapContentDiv.style.display = 'block';
+                            if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
+                            if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'block';
 
-                                if(shapTableDisplay) shapTableDisplay.innerHTML = data.shap_table_html || '<p class="text-muted">SHAP 表未生成。</p>';
-                                if (data.shap_waterfall_plot_base64) {
-                                    if(shapWaterfallImg) {
-                                        shapWaterfallImg.src = 'data:image/png;base64,' + data.shap_waterfall_plot_base64;
-                                        shapWaterfallImg.style.display = 'block';
-                                    }
+                            if(shapTableDisplay) shapTableDisplay.innerHTML = data.shap_table_html || '<p class="text-muted">SHAP 表未生成。</p>';
+                            if (data.shap_waterfall_plot_base64 && shapWaterfallImg) {
+                                shapWaterfallImg.src = 'data:image/png;base64,' + data.shap_waterfall_plot_base64;
+                                shapWaterfallImg.style.display = 'block';
+                            } else if (shapWaterfallImg) {
+                                shapWaterfallImg.style.display = 'none';
+                                document.querySelector('#single-pred-shap-waterfall').innerHTML = '<p class="text-muted">Waterfall 图未生成。</p>';
+                            }
+                            
+                            if (bayesSuggestionContainer) {
+                                if (data.bayes_suggestion) {
+                                    bayesSuggestionContainer.textContent = data.bayes_suggestion;
                                 } else {
-                                    if(shapWaterfallImg) shapWaterfallImg.style.display = 'none';
-                                    document.querySelector('#single-pred-shap-waterfall').innerHTML = '<p class="text-muted">Waterfall 图未生成。</p>';
+                                    bayesSuggestionContainer.textContent = '未能生成调整建议。';
                                 }
-                                
-                                if (bayesSuggestionContainer) {
-                                    if (data.bayes_suggestion) {
-                                        bayesSuggestionContainer.textContent = data.bayes_suggestion;
-                                    } else {
-                                        bayesSuggestionContainer.textContent = '未能生成调整建议。';
-                                    }
-                                }
-                            } else { 
-                                if(shapContentDiv) shapContentDiv.style.display = 'none';
-                                if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'block';
-                                if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
                             }
                         } else { 
-                            if(errorDisplay) {
-                                errorDisplay.textContent = data.error || '后端处理失败，但未提供具体错误信息。';
-                                errorDisplay.style.display = 'block';
-                            }
-                            // 清理旧的预测结果内容
-                            if(inputDataDisplay) inputDataDisplay.innerHTML = '';
-                            if(probDisplay) probDisplay.textContent = 'N/A';
-                            if(labelDisplay) labelDisplay.textContent = 'N/A';
                             if(shapContentDiv) shapContentDiv.style.display = 'none';
-                            if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
+                            if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'block';
                             if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
                         }
-                    })
-                    .catch(error => {
-                        if(loader) loader.style.display = 'none';
-                        if(resultsContainer) resultsContainer.style.display = 'block'; 
+                    } else { 
                         if(errorDisplay) {
-                             errorDisplay.textContent = '请求失败: ' + error.message; // 显示更具体的错误
-                             errorDisplay.style.display = 'block';
+                            errorDisplay.textContent = data.error || '后端处理失败，但未提供具体错误信息。';
+                            errorDisplay.style.display = 'block';
                         }
-                        console.error('Fetch API 请求本身发生错误:', error);
-                    });
+                        // 清理可能已部分填充的旧结果
+                        if(inputDataDisplay) inputDataDisplay.innerHTML = '';
+                        if(probDisplay) probDisplay.textContent = 'N/A';
+                        if(labelDisplay) labelDisplay.textContent = 'N/A';
+                    }
+                })
+                .catch(error => { // 这个 catch 处理 fetch 本身的失败 (如网络问题) 或上面 throw 的错误
+                    if(loader) loader.style.display = 'none';
+                    if(resultsContainer) resultsContainer.style.display = 'block'; 
+                    if(errorDisplay) {
+                         errorDisplay.textContent = '请求失败: ' + error.message; 
+                         errorDisplay.style.display = 'block';
+                    }
+                    console.error('Fetch API 请求处理链中发生错误:', error);
                 });
-            }
+            });
         });
     </script>
 </body>
