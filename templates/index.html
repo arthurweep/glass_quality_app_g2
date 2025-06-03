@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>工业质检智能分析系统 - 高级版</title>
+    <title>工业质检智能分析系统 - 高级中文版</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .waterfall-plot { max-width: 100%; height: auto; }
@@ -16,7 +16,7 @@
 </head>
 <body>
 <div class="container mt-4 mb-5">
-    <h2 class="mb-4 text-center">工业质检智能分析系统 - 高级版</h2>
+    <h2 class="mb-4 text-center">工业质检智能分析系统 - 高级中文版</h2>
     
     <div class="card mb-4">
         <div class="card-header bg-primary text-white">
@@ -52,7 +52,7 @@
         <div class="card-body">
             <div class="row">
                 <div class="col-md-5">
-                    <h6>特征重要性 (XGBoost Built-in):</h6>
+                    <h6>特征重要性排序:</h6>
                     {% if feature_plot %}
                         <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid" alt="特征重要性图">
                     {% else %}
@@ -102,7 +102,7 @@
                     <div class="col-sm-8">
                         <input type="number" step="any" class="form-control form-control-sm" 
                                name="{{ feature }}" value="{{ default_values[feature]|round(3) if default_values[feature] is not none else '' }}" required
-                               placeholder="请输入 {{ feature }} 的值">
+                               placeholder="请输入“{{ feature }}”的值"> {# <-- 修改点：中文提示 --> #}
                     </div>
                 </div>
                 {% endfor %}
@@ -113,7 +113,7 @@
 
     <div id="resultsSection" style="display:none;">
         <div class="card mb-4">
-            <div id="resultCardHeader" class="card-header text-white"> <!-- 背景色会动态改变 -->
+            <div id="resultCardHeader" class="card-header text-white"> 
                 <h5 id="resultTitle">检测结果详情</h5>
             </div>
             <div class="card-body">
@@ -156,7 +156,7 @@
             </div>
         </div>
     </div>
-    {% endif %} {# 对应 {% if show_results %} #}
+    {% endif %} 
 </div>
 
 <script>
@@ -167,13 +167,11 @@ document.addEventListener('DOMContentLoaded', function() {
             e.preventDefault();
             var formData = new FormData(this);
             
-            // UI重置
             document.getElementById('resultsSection').style.display = 'none';
             document.getElementById('adjustmentCard').style.display = 'none';
             document.getElementById('waterfallPlot').innerHTML = '<p class="text-center text-muted">分析中...</p>';
             document.getElementById('adjustmentBody').innerHTML = '';
             document.getElementById('finalPrediction').innerHTML = '';
-
 
             fetch('/predict', {
                 method: 'POST',
@@ -191,7 +189,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 
-                // 更新基础判定结果
                 document.getElementById('probValue').textContent = data.prob;
                 const resultLabelEl = document.getElementById('resultLabel');
                 const resultCardHeaderEl = document.getElementById('resultCardHeader');
@@ -205,18 +202,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     resultCardHeaderEl.className = 'card-header bg-success text-white';
                 }
                 
-                // 更新SHAP Waterfall图
                 const waterfallPlotEl = document.getElementById('waterfallPlot');
-                if(data.waterfall){
+                if(data.waterfall){ // 即使合格也可能想看图，如果提供了
                     waterfallPlotEl.innerHTML = 
                         '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot img-fluid" alt="SHAP Waterfall Plot">';
-                } else if (data.is_ng) {
-                     waterfallPlotEl.innerHTML = '<p class="text-muted">Waterfall图未能生成 (可能由于SHAP计算问题)。</p>';
                 } else {
-                    waterfallPlotEl.innerHTML = '<p class="text-muted">预测为合格，通常无需Waterfall图分析细节。</p>';
+                     waterfallPlotEl.innerHTML = '<p class="text-muted">Waterfall图未生成或不适用。</p>';
                 }
                 
-                // 更新智能调整建议
                 const adjustmentBodyEl = document.getElementById('adjustmentBody');
                 const finalPredictionEl = document.getElementById('finalPrediction');
                 const adjustmentCardEl = document.getElementById('adjustmentCard');
@@ -240,10 +233,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                     adjustmentBodyEl.innerHTML = html;
                     
-                    let finalProbText = data.final_prob_after_adjustment !== null ? data.final_prob_after_adjustment.toFixed(3) : "N/A";
+                    let finalProbText = (data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment !== undefined) ? data.final_prob_after_adjustment.toFixed(3) : data.prob; // 如果没有调整后的概率，显示原始概率
                     let outcomeText = "仍可能不合格";
                     let outcomeClass = "text-danger";
-                    if (data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment >= data.threshold) {
+
+                    if (parseFloat(finalProbText) >= data.threshold) {
                         outcomeText = "✅ 预期合格";
                         outcomeClass = "text-success";
                     }
@@ -252,11 +246,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         '<strong>综合以上调整后，预计合格(OK)概率约为:</strong> ' + finalProbText + ' → ' +
                         '<span class="' + outcomeClass + ' font-weight-bold">' + outcomeText + '</span>';
                     adjustmentCardEl.style.display = 'block';
-                } else if (data.is_ng) { // 不合格但无建议
+                } else if (data.is_ng) { 
                     adjustmentBodyEl.innerHTML = '<tr><td colspan="6" class="text-center text-muted">未能计算出有效的调整建议，或当前已非常接近合格。</td></tr>';
                     finalPredictionEl.innerHTML = '';
                     adjustmentCardEl.style.display = 'block';
-                } else { // 合格
+                } else { 
                     adjustmentCardEl.style.display = 'none';
                 }
                 
@@ -265,7 +259,6 @@ document.addEventListener('DOMContentLoaded', function() {
             .catch(function(err) {
                 console.error("Fetch error:", err);
                 alert('请求失败: ' + err.message + '. 请检查浏览器控制台获取更多信息。');
-                 // 也可以在页面上显示错误
                  const resultsSection = document.getElementById('resultsSection');
                  resultsSection.style.display = 'block';
                  resultsSection.innerHTML = `<div class="alert alert-danger">请求处理失败: ${err.message}</div>`;
