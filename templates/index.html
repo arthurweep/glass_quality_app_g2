@@ -28,13 +28,13 @@
             100% { transform: rotate(360deg); }
         }
         #bayes-suggestion-container {
-             white-space: pre-wrap; /* 保留换行和空格 */
+             white-space: pre-wrap; 
              margin-top: 1rem;
              padding: 10px;
              background-color: #f8f9fa;
              border: 1px solid #dee2e6;
              border-radius: .25rem;
-             font-family: Consolas, "Courier New", monospace; /* 等宽字体更适合显示建议 */
+             font-family: Consolas, "Courier New", monospace; 
              font-size: 0.9em;
         }
     </style>
@@ -85,7 +85,6 @@
                         <h3 class="mt-3">自动最优阈值说明</h3>
                         <p>{{ recommended_threshold_text | safe if recommended_threshold_text else '阈值信息未生成。' }}</p>
                         {% if best_recommendation_html %}
-                            <!-- <h4>当前阈值说明:</h4> -->
                             <div class="table-responsive">{{ best_recommendation_html | safe }}</div>
                         {% endif %}
                          <h4>最优阈值下的性能指标:</h4>
@@ -135,7 +134,6 @@
                         </div>
                     </div>
 
-                    <!-- 单样本预测结果显示区域 -->
                     <div id="single-prediction-results-container" class="card mt-4" style="display: none;">
                         <div class="card-header">📋 单一样本分析结果</div>
                         <div class="card-body">
@@ -146,7 +144,6 @@
                             <p><strong>所用分类阈值 (自动最优):</strong> <span id="single-pred-threshold">{{ current_best_threshold | default('N/A') }}</span></p>
                             <p><strong>最终判断:</strong> <span id="single-pred-label" style="font-weight:bold;">N/A</span></p>
                             
-                            <!-- SHAP 分析内容 (仅不合格时显示) -->
                             <div id="shap-analysis-content" style="display: none;">
                                 <h5 class="mt-3">Top 影响因子 (SHAP + 概率影响):</h5>
                                 <div class="table-responsive" id="single-pred-shap-table"></div>
@@ -156,12 +153,10 @@
                                 </div>
                             </div>
                             
-                            <!-- 合格提示 -->
                              <div id="shap-pass-message" class="mt-3 text-success" style="display: none;">
                                 预测为合格, 不展示SHAP分析和调整建议。
                             </div>
 
-                            <!-- 贝叶斯优化建议 (仅不合格时显示) -->
                             <div id="bayes-suggestion-container-wrapper" style="display:none;">
                                 <h5 class="mt-4">💡 调整建议 (贝叶斯优化):</h5>
                                 <div id="bayes-suggestion-container"></div>
@@ -186,7 +181,7 @@
             const errorDisplay = document.getElementById('single-pred-error-message');
             const inputDataDisplay = document.getElementById('single-pred-input-data');
             const probDisplay = document.getElementById('single-pred-prob');
-            const thresholdDisplay = document.getElementById('single-pred-threshold'); // 这个会从后端获取
+            const thresholdDisplay = document.getElementById('single-pred-threshold'); 
             const labelDisplay = document.getElementById('single-pred-label');
             
             const shapContentDiv = document.getElementById('shap-analysis-content');
@@ -202,12 +197,11 @@
                     event.preventDefault(); 
                     
                     if(loader) loader.style.display = 'block';
-                    if(errorDisplay) errorDisplay.style.display = 'none'; // 清除旧错误
-                    if(resultsContainer) resultsContainer.style.display = 'none'; // 先隐藏旧结果
+                    if(errorDisplay) errorDisplay.style.display = 'none'; 
+                    if(resultsContainer) resultsContainer.style.display = 'none'; 
                     if(shapContentDiv) shapContentDiv.style.display = 'none';
                     if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
                     if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
-
 
                     const formData = new FormData(predictForm);
                     
@@ -234,10 +228,9 @@
                             
                             if(inputDataDisplay) inputDataDisplay.innerHTML = data.input_data_html || '<p class="text-muted">无输入数据。</p>';
                             if(probDisplay) probDisplay.textContent = data.prob_ok || 'N/A';
-                            if(thresholdDisplay) thresholdDisplay.textContent = data.threshold_used || 'N/A'; // 更新为后端返回的当前阈值
+                            if(thresholdDisplay) thresholdDisplay.textContent = data.threshold_used || 'N/A'; 
                             if(labelDisplay) labelDisplay.textContent = data.label || 'N/A';
                             
-                            // 根据是否不合格 (is_ng) 来显示SHAP和贝叶斯建议
                             if (data.is_ng) {
                                 if(shapContentDiv) shapContentDiv.style.display = 'block';
                                 if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'none';
@@ -261,17 +254,16 @@
                                         bayesSuggestionContainer.textContent = '未能生成调整建议。';
                                     }
                                 }
-                            } else { // 如果是合格
+                            } else { 
                                 if(shapContentDiv) shapContentDiv.style.display = 'none';
                                 if(shapPassMessageDiv) shapPassMessageDiv.style.display = 'block';
                                 if(bayesSuggestionWrapper) bayesSuggestionWrapper.style.display = 'none';
                             }
-                        } else { // AJAX请求本身失败或后端返回 success: false
+                        } else { 
                             if(errorDisplay) {
                                 errorDisplay.textContent = data.error || '发生未知错误。';
                                 errorDisplay.style.display = 'block';
                             }
-                            // 清理旧的预测结果内容
                             if(inputDataDisplay) inputDataDisplay.innerHTML = '';
                             if(probDisplay) probDisplay.textContent = 'N/A';
                             if(labelDisplay) labelDisplay.textContent = 'N/A';
@@ -282,7 +274,7 @@
                     })
                     .catch(error => {
                         if(loader) loader.style.display = 'none';
-                        if(resultsContainer) resultsContainer.style.display = 'block';
+                        if(resultsContainer) resultsContainer.style.display = 'block'; 
                         if(errorDisplay) {
                              errorDisplay.textContent = '请求失败: ' + error.message;
                              errorDisplay.style.display = 'block';
