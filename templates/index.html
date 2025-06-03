@@ -6,20 +6,20 @@
     <title>工业质检智能分析系统</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        .waterfall-plot { max-width: 100%; }
+        .waterfall-plot { max-width: 100%; height: auto; } /* 确保图片自适应宽度 */
         .adjustment-table td { vertical-align: middle; }
-        .positive { color: #28a745; }
-        .negative { color: #dc3545; }
+        .positive { color: #28a745; /* 绿色代表正面影响或增加 */ }
+        .negative { color: #dc3545; /* 红色代表负面影响或减少 */ }
     </style>
 </head>
 <body>
 <div class="container mt-4">
-    <h2 class="mb-4">工业质检智能分析系统</h2>
+    <h2 class="mb-4 text-center">工业质检智能分析系统</h2>
     
     <!-- 文件上传区 -->
     <div class="card mb-4">
         <div class="card-header bg-primary text-white">
-            <h5>1. 上传训练数据</h5>
+            <h5>1. 上传训练数据 (CSV格式)</h5>
         </div>
         <div class="card-body">
             {% if error_msg %}
@@ -27,15 +27,16 @@
             {% endif %}
             <form method="post" enctype="multipart/form-data">
                 <div class="form-group">
-                    <input type="file" name="file" class="form-control-file" required>
+                    <label for="fileUpload">选择文件:</label>
+                    <input type="file" name="file" id="fileUpload" class="form-control-file" required>
                 </div>
-                <button type="submit" class="btn btn-primary">开始训练模型</button>
+                <button type="submit" class="btn btn-primary">上传并训练模型</button>
             </form>
             {% if filename %}
                 <div class="mt-3">
                     <span class="badge badge-success">已加载文件: {{ filename }}</span>
-                    {% if model_metrics %}
-                        <span class="badge badge-info ml-2">最佳阈值: {{ "%.2f"|format(model_metrics.threshold) }}</span>
+                    {% if model_metrics and model_metrics.threshold is not none %}
+                        <span class="badge badge-info ml-2">当前模型判定阈值 (OK类概率): {{ "%.2f"|format(model_metrics.threshold) }}</span>
                     {% endif %}
                 </div>
             {% endif %}
@@ -46,29 +47,39 @@
     <!-- 模型信息 -->
     <div class="card mb-4">
         <div class="card-header bg-info text-white">
-            <h5>2. 模型信息</h5>
+            <h5>2. 当前模型信息概览</h5>
         </div>
         <div class="card-body">
             <div class="row">
-                <div class="col-md-4">
+                <div class="col-md-5">
+                    <h6>特征重要性排序:</h6>
                     {% if feature_plot %}
-                        <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid">
+                        <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid" alt="特征重要性图">
+                    {% else %}
+                        <p class="text-muted">特征重要性图表未生成。</p>
                     {% endif %}
                 </div>
-                <div class="col-md-8">
+                <div class="col-md-7">
                     {% if model_metrics %}
-                    <h5>模型参数</h5>
+                    <h6>模型参数:</h6>
                     <ul>
                         <li>决策树数量: {{ model_metrics.trees }}</li>
                         <li>最大深度: {{ model_metrics.depth }}</li>
                         <li>学习率: {{ "%.3f"|format(model_metrics.lr) }}</li>
                     </ul>
-                    <h5 class="mt-4">训练表现</h5>
-                    <table class="table table-sm">
-                        <tr><th>准确率</th><td>{{ "%.1f%"|format(model_metrics.accuracy*100) }}</td></tr>
-                        <tr><th>合格召回率</th><td>{{ "%.1f%"|format(model_metrics.recall_ok*100) }}</td></tr>
-                        <tr><th>不合格召回率</th><td>{{ "%.1f%"|format(model_metrics.recall_ng*100) }}</td></tr>
+                    <h6 class="mt-3">基于训练数据的表现:</h6>
+                    <table class="table table-sm table-bordered">
+                        <thead class="thead-light">
+                            <tr><th>指标</th><th>值</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><th>整体准确率</th><td>{{ "%.1f%%"|format(model_metrics.accuracy*100) }}</td></tr>
+                            <tr><th>合格(OK)样本召回率</th><td>{{ "%.1f%%"|format(model_metrics.recall_ok*100) }}</td></tr>
+                            <tr><th>不合格(NG)样本召回率</th><td>{{ "%.1f%%"|format(model_metrics.recall_ng*100) }}</td></tr>
+                        </tbody>
                     </table>
+                    {% else %}
+                    <p class="text-muted">模型指标未生成。</p>
                     {% endif %}
                 </div>
             </div>
@@ -78,20 +89,20 @@
     <!-- 预测区 -->
     <div class="card mb-4">
         <div class="card-header bg-warning">
-            <h5>3. 单样本检测</h5>
+            <h5>3. 单一样本检测与优化建议</h5>
         </div>
         <div class="card-body">
             <form id="predictForm">
                 {% for feature in form_inputs %}
                 <div class="form-group row">
-                    <label class="col-sm-3 col-form-label">{{ feature }}</label>
-                    <div class="col-sm-9">
+                    <label class="col-sm-4 col-form-label text-right">{{ feature }}:</label>
+                    <div class="col-sm-8">
                         <input type="number" step="any" class="form-control" 
-                               name="{{ feature }}" value="{{ default_values[feature]|round(2) }}" required>
+                               name="{{ feature }}" value="{{ default_values[feature]|round(3) if default_values[feature] is not none else '' }}" required>
                     </div>
                 </div>
                 {% endfor %}
-                <button type="submit" class="btn btn-warning btn-block">开始检测</button>
+                <button type="submit" class="btn btn-warning btn-block">开始检测与分析</button>
             </form>
         </div>
     </div>
@@ -100,46 +111,47 @@
     <div id="results" style="display:none;">
         <div class="card mb-4">
             <div class="card-header bg-success text-white">
-                <h5>检测结果</h5>
+                <h5>检测结果详情</h5>
             </div>
             <div class="card-body">
                 <div class="row">
                     <div class="col-md-6">
-                        <h5>基础结果</h5>
-                        <p>预测概率: <span id="probValue"></span></p>
-                        <p>判定结果: <span id="resultLabel"></span></p>
+                        <h6>基础判定:</h6>
+                        <p>预测合格(OK)概率: <strong id="probValue"></strong></p>
+                        <p>判定结果: <strong id="resultLabel"></strong></p>
+                         <p class="text-muted small">当前使用阈值: {{ "%.2f"|format(model_metrics.threshold if model_metrics else 0.5) }}</p>
                     </div>
-                    <div class="col-md-6">
-                        <h5>SHAP分析</h5>
+                    <div class="col-md-6" id="waterfallPlotContainer">
+                        <h6>SHAP Waterfall图 (判断依据):</h6>
                         <div id="waterfallPlot"></div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="card mb-4">
+        <div id="adjustmentCard" class="card mb-4" style="display:none;">
             <div class="card-header bg-danger text-white">
-                <h5>精准调整建议</h5>
+                <h5>精准调整建议 (如何变为合格)</h5>
             </div>
             <div class="card-body">
-                <table class="table table-bordered adjustment-table">
+                <table class="table table-bordered table-sm adjustment-table">
                     <thead class="bg-light">
                         <tr>
                             <th>特征</th>
                             <th>当前值</th>
-                            <th>建议调整</th>
-                            <th>新值</th>
-                            <th>预期提升</th>
+                            <th>建议调整量</th>
+                            <th>调整后目标值</th>
+                            <th>此调整对合格概率的预期贡献</th>
                         </tr>
                     </thead>
                     <tbody id="adjustmentBody">
                     </tbody>
                 </table>
-                <div id="finalPrediction" class="mt-3 font-weight-bold"></div>
+                <div id="finalPrediction" class="mt-3 alert alert-info"></div>
             </div>
         </div>
     </div>
-    {% endif %}
+    {% endif %} {# Corresponds to {% if show_results %} #}
 </div>
 
 <script>
@@ -150,60 +162,103 @@ document.addEventListener('DOMContentLoaded', function() {
             e.preventDefault();
             var formData = new FormData(this);
             
+            // 清空旧结果，显示加载状态等（可选）
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('adjustmentCard').style.display = 'none';
+            document.getElementById('waterfallPlot').innerHTML = '';
+
+
             fetch('/predict', {
                 method: 'POST',
-                body: formData
+                body: formData // FormData 会自动设置 Content-Type 为 multipart/form-data
             })
-            .then(r => r.json())
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw new Error(err.error || `HTTP error ${response.status}`); });
+                }
+                return response.json();
+            })
             .then(data => {
                 if(data.error){
                     alert('错误: ' + data.error);
                     return;
                 }
                 
+                // 显示基础结果
                 document.getElementById('probValue').textContent = data.prob;
-                document.getElementById('resultLabel').textContent = 
-                    data.is_ng ? '❌ 不合格' : '✅ 合格';
-                document.getElementById('resultLabel').className = 
-                    data.is_ng ? 'text-danger' : 'text-success';
+                const resultLabelEl = document.getElementById('resultLabel');
+                resultLabelEl.textContent = data.is_ng ? '❌ 不合格 (NG)' : '✅ 合格 (OK)';
+                resultLabelEl.className = data.is_ng ? 'text-danger font-weight-bold' : 'text-success font-weight-bold';
                 
-                if(data.waterfall){
-                    document.getElementById('waterfallPlot').innerHTML = 
-                        '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot">';
+                // 显示SHAP Waterfall图
+                const waterfallPlotEl = document.getElementById('waterfallPlot');
+                const waterfallContainer = document.getElementById('waterfallPlotContainer');
+
+                if(data.is_ng && data.waterfall){
+                    waterfallPlotEl.innerHTML = 
+                        '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot img-fluid" alt="SHAP Waterfall Plot">';
+                    waterfallContainer.style.display = 'block';
+                } else if (!data.is_ng) { // 如果是合格，也提示一下
+                     waterfallPlotEl.innerHTML = '<p class="text-muted">预测为合格，不显示Waterfall图。</p>';
+                     waterfallContainer.style.display = 'block';
+                } else {
+                    waterfallPlotEl.innerHTML = '<p class="text-muted">Waterfall图未生成。</p>';
+                     waterfallContainer.style.display = 'block';
                 }
                 
-                if(data.is_ng && data.adjustments){
-                    var html = '';
-                    var totalGain = 0;
+                // 显示调整建议
+                const adjustmentBodyEl = document.getElementById('adjustmentBody');
+                const finalPredictionEl = document.getElementById('finalPrediction');
+                const adjustmentCardEl = document.getElementById('adjustmentCard');
+
+                if(data.is_ng && data.adjustments && Object.keys(data.adjustments).length > 0){
+                    let html = '';
+                    let totalExpectedGain = 0;
                     Object.entries(data.adjustments).forEach(function(entry) {
-                        var f = entry[0];
-                        var adj = entry[1];
-                        totalGain += adj.expected_gain;
+                        let featureName = entry[0];
+                        let adjDetails = entry[1];
+                        totalExpectedGain += adjDetails.expected_gain;
                         html += '<tr>' +
-                            '<td>' + f + '</td>' +
-                            '<td>' + adj.current_value.toFixed(2) + '</td>' +
-                            '<td class="' + (adj.adjustment > 0 ? 'positive' : 'negative') + '">' +
-                                adj.adjustment.toFixed(2) + '</td>' +
-                            '<td>' + adj.new_value.toFixed(2) + '</td>' +
-                            '<td>' + (adj.expected_gain*100).toFixed(1) + '%</td>' +
+                            '<td>' + featureName + '</td>' +
+                            '<td>' + adjDetails.current_value.toFixed(3) + '</td>' +
+                            '<td class="' + (adjDetails.adjustment > 0 ? 'positive' : 'negative') + '">' +
+                                (adjDetails.adjustment > 0 ? '+' : '') + adjDetails.adjustment.toFixed(3) + '</td>' +
+                            '<td>' + adjDetails.new_value.toFixed(3) + '</td>' +
+                            '<td class="' + (adjDetails.expected_gain > 0 ? 'positive' : 'negative') + '">' +
+                                (adjDetails.expected_gain > 0 ? '+' : '') + (adjDetails.expected_gain*100).toFixed(1) + '%</td>' +
                         '</tr>';
                     });
                     
-                    var finalProb = data.prob + totalGain;
-                    document.getElementById('adjustmentBody').innerHTML = html;
-                    document.getElementById('finalPrediction').innerHTML = 
-                        '综合调整后预计概率: ' + finalProb.toFixed(3) + ' → ' +
-                        '<span class="' + (finalProb >= data.threshold ? 'text-success' : 'text-danger') + '">' +
-                            (finalProb >= data.threshold ? '合格' : '仍需调整') +
+                    adjustmentBodyEl.innerHTML = html;
+                    
+                    let finalProbAfterAdjustment = data.prob + totalExpectedGain;
+                    if (finalProbAfterAdjustment > 1) finalProbAfterAdjustment = 1.0;
+                    if (finalProbAfterAdjustment < 0) finalProbAfterAdjustment = 0.0;
+
+                    finalPredictionEl.innerHTML = 
+                        '<strong>综合调整后预计合格概率:</strong> ' + finalProbAfterAdjustment.toFixed(3) + ' → ' +
+                        '<span class="' + (finalProbAfterAdjustment >= data.threshold ? 'text-success' : 'text-danger') + ' font-weight-bold">' +
+                            (finalProbAfterAdjustment >= data.threshold ? '✅ 预期合格' : '❌ 可能仍不合格，或需更多调整') +
                         '</span>';
+                    adjustmentCardEl.style.display = 'block';
+                } else {
+                    adjustmentBodyEl.innerHTML = '';
+                    finalPredictionEl.innerHTML = data.is_ng ? '<p class="text-muted">未能计算出有效的调整建议。</p>' : '';
+                    adjustmentCardEl.style.display = data.is_ng ? 'block' : 'none'; // 如果不合格但无建议，也显示卡片
                 }
                 
-                document.getElementById('results').style.display = 'block';
+                document.getElementById('results').style.display = 'block'; // 显示整个结果区域
             })
             .catch(function(err) {
                 alert('请求失败: ' + err.message);
+                 document.getElementById('results').style.display = 'block'; // 仍然显示结果区域以便调试
+                 document.getElementById('probValue').textContent = '错误';
+                 document.getElementById('resultLabel').textContent = err.message;
+                 document.getElementById('resultLabel').className = 'text-danger';
             });
         });
     }
 });
 </script>
+</body>
+</html>
