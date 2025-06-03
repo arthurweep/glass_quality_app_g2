@@ -7,4 +7,4 @@ matplotlib
 shap
 scipy
 scikit-optimize
-# gunicorn # 使用 python app.py 启动时，gunicorn 不是必需的，可以注释或删除
+# gunicorn # 如果仍想尝试Gunicorn，则取消注释
