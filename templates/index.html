@@ -2,8 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>工业质检智能分析系统</title>
-    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .waterfall-plot { max-width: 100%; }
         .adjustment-table td { vertical-align: middle; }
@@ -13,6 +14,8 @@
 </head>
 <body>
 <div class="container mt-4">
+    <h2 class="mb-4">工业质检智能分析系统</h2>
+    
     <!-- 文件上传区 -->
     <div class="card mb-4">
         <div class="card-header bg-primary text-white">
@@ -31,14 +34,16 @@
             {% if filename %}
                 <div class="mt-3">
                     <span class="badge badge-success">已加载文件: {{ filename }}</span>
-                    <span class="badge badge-info ml-2">最佳阈值: {{ "%.2f"|format(model_metrics.threshold) }}</span>
+                    {% if model_metrics %}
+                        <span class="badge badge-info ml-2">最佳阈值: {{ "%.2f"|format(model_metrics.threshold) }}</span>
+                    {% endif %}
                 </div>
             {% endif %}
         </div>
     </div>
 
-    <!-- 模型信息 -->
     {% if show_results %}
+    <!-- 模型信息 -->
     <div class="card mb-4">
         <div class="card-header bg-info text-white">
             <h5>2. 模型信息</h5>
@@ -46,9 +51,12 @@
         <div class="card-body">
             <div class="row">
                 <div class="col-md-4">
-                    <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid">
+                    {% if feature_plot %}
+                        <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid">
+                    {% endif %}
                 </div>
                 <div class="col-md-8">
+                    {% if model_metrics %}
                     <h5>模型参数</h5>
                     <ul>
                         <li>决策树数量: {{ model_metrics.trees }}</li>
@@ -61,6 +69,7 @@
                         <tr><th>合格召回率</th><td>{{ "%.1f%"|format(model_metrics.recall_ok*100) }}</td></tr>
                         <tr><th>不合格召回率</th><td>{{ "%.1f%"|format(model_metrics.recall_ng*100) }}</td></tr>
                     </table>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -78,7 +87,7 @@
                     <label class="col-sm-3 col-form-label">{{ feature }}</label>
                     <div class="col-sm-9">
                         <input type="number" step="any" class="form-control" 
-                               name="{{ feature }}" value="{{ default_values[feature]|round(2) }}">
+                               name="{{ feature }}" value="{{ default_values[feature]|round(2) }}" required>
                     </div>
                 </div>
                 {% endfor %}
@@ -126,3 +135,75 @@
                     <tbody id="adjustmentBody">
                     </tbody>
                 </table>
+                <div id="finalPrediction" class="mt-3 font-weight-bold"></div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var form = document.getElementById('predictForm');
+    if(form) {
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(this);
+            
+            fetch('/predict', {
+                method: 'POST',
+                body: formData
+            })
+            .then(r => r.json())
+            .then(data => {
+                if(data.error){
+                    alert('错误: ' + data.error);
+                    return;
+                }
+                
+                document.getElementById('probValue').textContent = data.prob;
+                document.getElementById('resultLabel').textContent = 
+                    data.is_ng ? '❌ 不合格' : '✅ 合格';
+                document.getElementById('resultLabel').className = 
+                    data.is_ng ? 'text-danger' : 'text-success';
+                
+                if(data.waterfall){
+                    document.getElementById('waterfallPlot').innerHTML = 
+                        '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot">';
+                }
+                
+                if(data.is_ng && data.adjustments){
+                    var html = '';
+                    var totalGain = 0;
+                    Object.entries(data.adjustments).forEach(function(entry) {
+                        var f = entry[0];
+                        var adj = entry[1];
+                        totalGain += adj.expected_gain;
+                        html += '<tr>' +
+                            '<td>' + f + '</td>' +
+                            '<td>' + adj.current_value.toFixed(2) + '</td>' +
+                            '<td class="' + (adj.adjustment > 0 ? 'positive' : 'negative') + '">' +
+                                adj.adjustment.toFixed(2) + '</td>' +
+                            '<td>' + adj.new_value.toFixed(2) + '</td>' +
+                            '<td>' + (adj.expected_gain*100).toFixed(1) + '%</td>' +
+                        '</tr>';
+                    });
+                    
+                    var finalProb = data.prob + totalGain;
+                    document.getElementById('adjustmentBody').innerHTML = html;
+                    document.getElementById('finalPrediction').innerHTML = 
+                        '综合调整后预计概率: ' + finalProb.toFixed(3) + ' → ' +
+                        '<span class="' + (finalProb >= data.threshold ? 'text-success' : 'text-danger') + '">' +
+                            (finalProb >= data.threshold ? '合格' : '仍需调整') +
+                        '</span>';
+                }
+                
+                document.getElementById('results').style.display = 'block';
+            })
+            .catch(function(err) {
+                alert('请求失败: ' + err.message);
+            });
+        });
+    }
+});
+</script>
