@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>工业质检智能分析系统 - 高级中文版</title>
+    <title>工业质检智能分析系统 - 优化版</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .waterfall-plot { max-width: 100%; height: auto; }
@@ -16,7 +16,7 @@
 </head>
 <body>
 <div class="container mt-4 mb-5">
-    <h2 class="mb-4 text-center">工业质检智能分析系统 - 高级中文版</h2>
+    <h2 class="mb-4 text-center">工业质检智能分析系统 - 优化版</h2>
     
     <div class="card mb-4">
         <div class="card-header bg-primary text-white">
@@ -77,7 +77,7 @@
                             <tr><td>合格(OK)样本召回率 (Recall OK)</td><td>{{ "%.2f%%"|format(model_metrics.recall_ok*100) }}</td></tr>
                             <tr><td>不合格(NG)样本召回率 (Recall NG)</td><td><strong class="text-danger">{{ "%.2f%%"|format(model_metrics.recall_ng*100) }}</strong></td></tr>
                             <tr><td>合格(OK)样本精确率 (Precision OK)</td><td>{{ "%.2f%%"|format(model_metrics.precision_ok*100) }}</td></tr>
-                            <tr><td>不合格(NG)样本精确率 (Precision NG)</td><td>{{ "%.2f%%"|format(model_metrics.precision_ng*100) }}</td></tr>
+                            <tr><td>不合格(NG)样本精确率 (Precision NG)</td><td><strong class="text-primary">{{ "%.2f%%"|format(model_metrics.precision_ng*100) }}</strong></td></tr>
                             <tr><td>合格(OK)样本F1分数 (F1 OK)</td><td>{{ "%.3f"|format(model_metrics.f1_ok) }}</td></tr>
                             <tr><td>不合格(NG)样本F1分数 (F1 NG)</td><td>{{ "%.3f"|format(model_metrics.f1_ng) }}</td></tr>
                         </tbody>
@@ -102,7 +102,7 @@
                     <div class="col-sm-8">
                         <input type="number" step="any" class="form-control form-control-sm" 
                                name="{{ feature }}" value="{{ default_values[feature]|round(3) if default_values[feature] is not none else '' }}" required
-                               placeholder="请输入“{{ feature }}”的值"> {# <-- 修改点：中文提示 --> #}
+                               placeholder="请输入“{{ feature }}”的值">
                     </div>
                 </div>
                 {% endfor %}
@@ -122,7 +122,7 @@
                         <h6>基础判定:</h6>
                         <p>预测合格(OK)概率: <strong id="probValue" class="h4"></strong></p>
                         <p>判定结果: <strong id="resultLabel" class="h4"></strong></p>
-                         <p class="text-muted small">当前模型判定阈值: {{ "%.3f"|format(model_metrics.threshold if model_metrics else 0.5) }}</p>
+                         <p class="text-muted small">当前模型判定阈值: <span id="currentThresholdValue"></span></p>
                     </div>
                     <div class="col-lg-7" id="waterfallPlotContainer">
                         <h6>SHAP Waterfall图 (各特征对“合格”概率的贡献):</h6>
@@ -137,7 +137,7 @@
                 <h5>智能优化建议 (如何使样本合格)</h5>
             </div>
             <div class="card-body">
-                <p>以下建议旨在将样本的合格(OK)概率提升至阈值 {{ "%.3f"|format(model_metrics.threshold if model_metrics else 0.5) }} 以上。</p>
+                <p>以下建议旨在将样本的合格(OK)概率提升至阈值 <span id="targetThresholdForAdjustment"></span> 以上。</p>
                 <table class="table table-bordered table-hover table-sm adjustment-table">
                     <thead class="thead-light">
                         <tr>
@@ -201,18 +201,23 @@ document.addEventListener('DOMContentLoaded', function() {
                     resultLabelEl.className = 'text-success font-weight-bold h4';
                     resultCardHeaderEl.className = 'card-header bg-success text-white';
                 }
-                
+                document.getElementById('currentThresholdValue').textContent = data.threshold; // 显示当前使用的阈值
+
                 const waterfallPlotEl = document.getElementById('waterfallPlot');
-                if(data.waterfall){ // 即使合格也可能想看图，如果提供了
+                if(data.waterfall && data.is_ng){ // 只在不合格且有图时显示
                     waterfallPlotEl.innerHTML = 
                         '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot img-fluid" alt="SHAP Waterfall Plot">';
+                } else if (!data.is_ng) {
+                     waterfallPlotEl.innerHTML = '<p class="text-muted">预测为合格，通常无需Waterfall图分析细节。</p>';
                 } else {
-                     waterfallPlotEl.innerHTML = '<p class="text-muted">Waterfall图未生成或不适用。</p>';
+                    waterfallPlotEl.innerHTML = '<p class="text-muted">Waterfall图未能生成。</p>';
                 }
                 
                 const adjustmentBodyEl = document.getElementById('adjustmentBody');
                 const finalPredictionEl = document.getElementById('finalPrediction');
                 const adjustmentCardEl = document.getElementById('adjustmentCard');
+                document.getElementById('targetThresholdForAdjustment').textContent = data.threshold;
+
 
                 if(data.is_ng && data.adjustments && Object.keys(data.adjustments).length > 0){
                     let html = '';
@@ -233,7 +238,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                     adjustmentBodyEl.innerHTML = html;
                     
-                    let finalProbText = (data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment !== undefined) ? data.final_prob_after_adjustment.toFixed(3) : data.prob; // 如果没有调整后的概率，显示原始概率
+                    let finalProbText = (data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment !== undefined) ? data.final_prob_after_adjustment.toFixed(3) : data.prob;
                     let outcomeText = "仍可能不合格";
                     let outcomeClass = "text-danger";
 
