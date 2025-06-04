@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>工业质检智能分析系统 - 最终优化版 v3</title>
+    <title>工业质检智能分析系统 - 最终优化版 v3</title> <!-- 可以更新版本号 -->
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet" />
     <style>
         .waterfall-plot { max-width: 100%; height: auto; }
@@ -18,7 +18,6 @@
     <div class="container mt-4 mb-5">
         <h2 class="mb-4 text-center">工业质检智能分析系统 - 最终优化版 v3</h2>
 
-        <!-- 文件上传、模型信息、单样本检测表单部分与上一版相同 -->
         <div class="card mb-4">
             <div class="card-header bg-primary text-white">
                 <h5>1. 上传训练数据 (CSV格式)</h5>
@@ -198,7 +197,7 @@
                             document.getElementById("probValue").textContent = data.prob;
                             const resultLabelEl = document.getElementById("resultLabel");
                             const resultCardHeaderEl = document.getElementById("resultCardHeader");
-                            initialIsNgForAdjustment = data.initial_is_ng_for_adjustment; // 获取最初的判定结果
+                            initialIsNgForAdjustment = data.initial_is_ng_for_adjustment;
                             if (data.is_ng) {
                                 resultLabelEl.textContent = "❌ 不合格 (NG)";
                                 resultLabelEl.className = "text-danger font-weight-bold h4";
@@ -250,7 +249,7 @@
                         body: JSON.stringify({
                             input_data: lastInputData,
                             shap_values: lastShapValues,
-                            initial_is_ng_for_adjustment: initialIsNgForAdjustment // 传递此状态
+                            initial_is_ng_for_adjustment: initialIsNgForAdjustment
                         }),
                     })
                         .then((response) => {
@@ -266,8 +265,8 @@
                             let adjustmentIndex = 1;
                             if (data.adjustments && Object.keys(data.adjustments).length > 0) {
                                 Object.entries(data.adjustments).forEach(function (entry) {
-                                    let featureKeyOriginal = entry[0];
-                                    let featureDisplayName = fieldLabelsJS[featureKeyOriginal] || featureKeyOriginal;
+                                    let featureKeyOriginal = entry[0]; // This is English key
+                                    let featureDisplayName = fieldLabelsJS[featureKeyOriginal] || featureKeyOriginal; // Translate to Chinese for display
                                     let adjDetails = entry[1];
                                     html += "<tr><td>" + adjustmentIndex++ + "</td><td><strong>" + featureDisplayName + "</strong></td><td>" + adjDetails.current_value.toFixed(3) + "</td>" +
                                         '<td class="' + (adjDetails.adjustment >= 0 ? "positive" : "negative") + '">' + (adjDetails.adjustment >= 0 ? "+" : "") + adjDetails.adjustment.toFixed(3) + "</td>" +
@@ -282,12 +281,12 @@
                                     outcomeClass = "text-success";
                                 }
                                 document.getElementById("finalPrediction").innerHTML = "<strong>综合以上调整后，预计合格(OK)概率约为:</strong> " + finalProbText + " → " + '<span class="' + outcomeClass + ' font-weight-bold">' + outcomeText + "</span>";
-                            } else { // data.adjustments 为空
+                            } else { // No adjustments returned
                                 html = '<tr><td colspan="6" class="text-center text-muted">' + (data.message || "未能计算出有效的调整建议。") + "</td></tr>";
                                 document.getElementById("finalPrediction").innerHTML = "";
                             }
-                             if(data.message && Object.keys(data.adjustments).length === 0) {
-                                document.getElementById("adjustMsg").textContent = data.message; // 在专门的div显示message
+                             if(data.message && (!data.adjustments || Object.keys(data.adjustments).length === 0)) { // Show message if no adjustments AND message exists
+                                document.getElementById("adjustMsg").textContent = data.message;
                             }
                             document.getElementById("adjustmentBody").innerHTML = html;
                         })
