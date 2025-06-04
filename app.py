@@ -50,9 +50,9 @@ def generate_feature_importance_plot(clf, feature_names):
     fig, ax = plt.subplots(figsize=(10, 7))
     num_features_to_display = min(len(feature_names), 15)
     ax.bar(range(num_features_to_display), [float(importance[i]) for i in indices[:num_features_to_display]])
-    ax.set_title('特征重要性', fontsize=14)
-    ax.set_xlabel('特征', fontsize=12)
-    ax.set_ylabel('重要性分数', fontsize=12)
+    ax.set_title('特征重要性', fontsize=14) # 使用中文标题
+    ax.set_xlabel('特征', fontsize=12)    # 使用中文标签
+    ax.set_ylabel('重要性分数', fontsize=12) # 使用中文标签
     ax.set_xticks(range(num_features_to_display))
     ax.set_xticklabels([FIELD_LABELS.get(feature_names[i], feature_names[i]) for i in indices[:num_features_to_display]], rotation=45, ha='right', fontsize=10)
     plt.tight_layout()
@@ -69,8 +69,10 @@ def find_best_threshold_for_ng_recall(clf, X, y, ng_label=0, ok_label=1, min_tar
             precision_ok_current = precision_score(y, y_pred, pos_label=ok_label, zero_division=0)
             candidate_thresholds_met_target.append((threshold_candidate, precision_ok_current, recall_ng_current))
     if candidate_thresholds_met_target:
-        candidate_thresholds_met_target.sort(key=lambda x: (x[1], x[2], -x[0]), reverse=True)
+        # 优先Precision OK高,其次NG Recall高,最后Threshold高
+        candidate_thresholds_met_target.sort(key=lambda x: (x[1], x[2], x[0]), reverse=True)
         best_threshold = candidate_thresholds_met_target[0][0]
+        app.logger.info(f"找到优化NG召回率的平衡阈值: {best_threshold:.3f} (NG召回率 >= {min_target_ng_recall}, OK精确率最高)")
     else:
         max_ng_recall_overall = -1.0
         best_threshold_for_max_ng_recall = 0.5
@@ -83,6 +85,7 @@ def find_best_threshold_for_ng_recall(clf, X, y, ng_label=0, ok_label=1, min_tar
             elif recall_ng_current == max_ng_recall_overall and threshold_candidate < best_threshold_for_max_ng_recall:
                 best_threshold_for_max_ng_recall = threshold_candidate
         best_threshold = best_threshold_for_max_ng_recall
+        app.logger.warning(f"未能达到目标NG召回率 {min_target_ng_recall}。选择最大化NG召回率的阈值: {best_threshold:.3f} (此时NG召回率: {max_ng_recall_overall:.2f})")
     return float(best_threshold)
 
 def calculate_precise_adjustment(clf, current_values_array, shap_values_array, threshold_ok_prob, feature_names):
@@ -93,6 +96,7 @@ def calculate_precise_adjustment(clf, current_values_array, shap_values_array, t
     required_boost = float(max(threshold_ok_prob - current_prob_ok, 0.0))
     if required_boost <= 1e-4:
         return adjustments, float(current_prob_ok)
+    # 按SHAP绝对值大小排序
     sorted_features_by_shap = sorted(enumerate(shap_values_np), key=lambda x: -abs(x[1]))
     adjusted_values_for_final_check = current_values_np.copy()
     for idx, shap_val_for_feature in sorted_features_by_shap:
@@ -146,7 +150,7 @@ def index():
             model_metrics=metrics,
             feature_plot=model_cache.get('feature_plot', None),
             error_msg=model_cache.pop('error', None),
-            field_labels=FIELD_LABELS
+            field_labels=FIELD_LABELS # 传递字段中文名映射
         )
     if request.method == 'POST':
         model_cache.clear()
@@ -163,7 +167,8 @@ def index():
             if "OK_NG" not in df.columns:
                 model_cache['error'] = "CSV文件中必须包含 'OK_NG' 列。"
                 return redirect(url_for('index'))
-            X = df.drop("OK_NG", axis=1)
+            X_raw = df.drop("OK_NG", axis=1)
+            X = X_raw.copy()
             for col in X.columns:
                 X[col] = pd.to_numeric(X[col], errors='coerce')
             X = X.fillna(X.mean())
@@ -203,3 +208,103 @@ def index():
                 'feature_plot': generate_feature_importance_plot(clf, features)
             })
         except Exception as e:
+            model_cache['error'] = f"处理文件时出错: {str(e)}"
+            app.logger.error(f"文件处理或模型训练出错: {e}", exc_info=True)
+        return redirect(url_for('index'))
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    global model_cache
+    if 'clf' not in model_cache:
+        return jsonify({'error': '请先上传并训练模型。'}), 400
+    try:
+        clf = model_cache['clf']
+        features = model_cache['features']
+        threshold = model_cache['metrics']['threshold']
+        input_data_dict = {}
+        for f_name in features:
+            val_str = request.form.get(f_name)
+            if val_str is None or val_str.strip() == '':
+                return jsonify({'error': f'特征 "{FIELD_LABELS.get(f_name, f_name)}" 的值不能为空。'}), 400
+            try:
+                input_data_dict[f_name] = float(val_str)
+            except ValueError:
+                 return jsonify({'error': f'特征 "{FIELD_LABELS.get(f_name, f_name)}" 的输入值 "{val_str}" 不是有效的数字。'}), 400
+        df_input = pd.DataFrame([input_data_dict], columns=features)
+        prob_ok = clf.predict_proba(df_input)[0, 1]
+        is_ng = bool(prob_ok < threshold)
+        background_data_df = model_cache['X_train_df']
+        explainer = shap.Explainer(clf, background_data_df)
+        shap_explanation_obj = explainer(df_input)
+        shap_values_for_output = shap_explanation_obj.values[0]
+        waterfall_plot_base64 = None
+        if is_ng: # 只有不合格时才生成waterfall图
+            base_val_for_waterfall = explainer.expected_value
+            if isinstance(base_val_for_waterfall, (np.ndarray, list)):
+                 base_val_for_waterfall = base_val_for_waterfall[1] if len(base_val_for_waterfall) == 2 else base_val_for_waterfall[0]
+            base_val_for_waterfall = float(base_val_for_waterfall)
+            shap_explanation_for_waterfall = shap.Explanation(
+                values=shap_values_for_output.astype(float),
+                base_values=base_val_for_waterfall,
+                data=df_input.iloc[0].values.astype(float),
+                feature_names=features
+            )
+            waterfall_plot_base64 = generate_shap_waterfall_base64(shap_explanation_for_waterfall)
+        response = {
+            'prob': float(round(prob_ok, 3)),
+            'threshold': float(round(threshold, 3)),
+            'is_ng': is_ng,
+            'shap_values': [float(round(v, 4)) for v in shap_values_for_output],
+            'metrics': model_cache['metrics'],
+            'waterfall': waterfall_plot_base64,
+            'input_data': input_data_dict # 用于后续的优化建议请求
+        }
+        return jsonify(response)
+    except Exception as e:
+        app.logger.error(f"预测接口 (/predict) 出错: {e}", exc_info=True)
+        return jsonify({'error': f'预测过程中发生内部错误: {str(e)}'}), 500
+
+@app.route('/adjust_single', methods=['POST'])
+def adjust_single():
+    global model_cache
+    if 'clf' not in model_cache:
+        return jsonify({'error': '请先上传并训练模型。'}), 400
+    try:
+        clf = model_cache['clf']
+        features = model_cache['features']
+        threshold = model_cache['metrics']['threshold']
+        # 从JSON body获取数据
+        json_data = request.get_json()
+        if not json_data:
+            return jsonify({'error': '请求体为空或不是有效的JSON。'}), 400
+            
+        input_data_dict = json_data.get('input_data')
+        shap_values_list = json_data.get('shap_values')
+
+        if not input_data_dict or not isinstance(input_data_dict, dict):
+            return jsonify({'error': '缺少或无效的 input_data。'}), 400
+        if not shap_values_list or not isinstance(shap_values_list, list) or len(shap_values_list) != len(features):
+            return jsonify({'error': '缺少或无效的 shap_values。'}), 400
+            
+        # 确保current_values_np_array的顺序与features一致
+        current_values_np_array = np.array([input_data_dict[f] for f in features], dtype=float)
+        shap_values_np_array = np.array(shap_values_list, dtype=float)
+        
+        adjustments, final_prob_after_adjustment = calculate_precise_adjustment(
+            clf, current_values_np_array, shap_values_np_array, threshold, features
+        )
+        
+        # 将调整建议中的英文特征名转换为中文标签
+        # adjustments_display = {FIELD_LABELS.get(k, k): v for k, v in adjustments.items()}
+
+        return jsonify({
+            'adjustments': adjustments, # 返回的key仍然是原始特征名，前端JS根据FIELD_LABELS转换
+            'final_prob_after_adjustment': float(final_prob_after_adjustment)
+        })
+    except Exception as e:
+        app.logger.error(f"优化建议接口 (/adjust_single) 出错: {e}", exc_info=True)
+        return jsonify({'error': f'优化建议过程中发生内部错误: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
