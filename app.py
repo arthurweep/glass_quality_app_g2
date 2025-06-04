@@ -2,6 +2,7 @@ import base64
 import io
 import os
 import logging
+import math # 导入math模块以使用 isnan 和 isinf
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -69,7 +70,7 @@ def generate_feature_importance_plot(clf, feature_names_original_english):
     return fig_to_base64(fig)
 
 def find_best_threshold_f1(clf, X, y):
-    # ... (与上一版 v6 逻辑一致)
+    # ... (与上一版 v7 逻辑一致)
     probs_ok = clf.predict_proba(X)[:, 1]
     best_f1_macro, best_thresh = 0.0, 0.5; best_metrics_at_thresh = {}
     for t in np.arange(0.01, 1.0, 0.01):
@@ -99,130 +100,128 @@ def find_best_threshold_f1(clf, X, y):
     final_metrics['threshold'] = final_threshold
     return final_threshold, final_metrics
 
-def calculate_adjustment_guaranteed_final(clf, current_values_array, shap_values_array, target_ok_prob, feature_names, initial_is_ng):
+def calculate_adjustment_guaranteed_final_v2(clf, current_values_array, shap_values_array, target_ok_prob, feature_names, initial_is_ng):
     """
-    “理论可行”的调整算法：迭代调整，直至达到目标概率，允许极大调整幅度。
-    目标：对于 NG 样本，必须给出一套调整方案。
+    “理论可行”的调整算法V2：确保对NG样本给出调整，并处理NaN的预期贡献。
     """
     original_values_np = np.array(current_values_array, dtype=float).flatten()
-    current_adjusted_values = original_values_np.copy() # 当前迭代中的特征值
+    current_adjusted_values = original_values_np.copy()
     
     initial_prob_ok = clf.predict_proba(original_values_np.reshape(1, -1))[0, 1]
 
-    # 如果样本最初就不是NG，并且其初始概率已经合格，则无需调整
     if not initial_is_ng and initial_prob_ok >= target_ok_prob:
         return {}, float(initial_prob_ok), "样本当前已为合格状态且满足目标概率，无需调整。"
 
-    # --- 调整参数 ---
-    # 对于NG样本，目标是略高于阈值，例如高出0.01，以确保稳定合格
     effective_target_prob = target_ok_prob + 0.01 if initial_is_ng else target_ok_prob
-    effective_target_prob = min(effective_target_prob, 0.999) # 概率不超过0.999
+    effective_target_prob = min(effective_target_prob, 0.999)
 
-    max_iterations_total = 100  # 总迭代次数上限，防止死循环
-    max_feature_adjustment_ratio = 5.0 # 允许特征值变化为其原始值的 +/- 500%
-    min_absolute_change_for_zero_original = 100.0 # 如果原始值为0，允许的最大绝对变化
-    min_meaningful_prob_change_per_step = 0.0001 # 每一步调整期望的最小概率提升
-    max_features_to_consider_per_iteration = 5 # 每轮迭代中重点考虑前几个影响最大的特征
-
-    cumulative_adjustments_dict = {} # 最终返回的调整方案
+    max_iterations_total = 50 # 减少迭代次数，但每轮尝试更多
+    max_abs_change_ratio_overall = 5.0 # 特征值最多变为原始值的 (1 +/- 5) 倍
+    min_absolute_change_for_zero_original_overall = 100.0
+    min_meaningful_prob_change_per_step = 0.0001
+    absolute_min_feature_change_step = 1e-5
+    
+    cumulative_adjustments_info = {}
 
     for iteration in range(max_iterations_total):
         current_prob_iter = clf.predict_proba(current_adjusted_values.reshape(1, -1))[0, 1]
 
-        if current_prob_iter >= effective_target_prob:
-            break # 已达到目标
-
-        prob_gap_to_target = effective_target_prob - current_prob_iter
-        if prob_gap_to_target <= 0: # 以防万一
-            break
+        if current_prob_iter >= effective_target_prob: break
         
-        # 动态计算当前状态下各特征的“伪敏感度”（基于初始SHAP值和当前调整方向）
-        # SHAP值大的特征，如果调整方向正确，则优先调整
-        # (feature_idx, shap_value, current_value, original_value)
-        feature_potentials = []
-        for i in range(len(feature_names)):
-            shap_val = shap_values_array[i]
-            # 调整方向：如果SHAP > 0, 增加特征值有利；如果SHAP < 0, 减少特征值有利
-            # 调整潜力：SHAP值越大，潜力越大
-            feature_potentials.append((i, shap_val, current_adjusted_values[i], original_values_np[i]))
+        prob_needed_to_reach_target = effective_target_prob - current_prob_iter
+        if prob_needed_to_reach_target <= 0 : break
         
-        # 优先调整SHAP绝对值大，且尚未达到“极端”边界的特征
-        feature_potentials.sort(key=lambda x: -abs(x[1])) 
-
+        # 基于初始SHAP值排序特征，并结合当前状态决定调整
+        # (feature_idx, initial_shap_value)
+        # 我们希望每次迭代都重新评估哪些特征调整最有利
+        # 这里简化为，每次迭代都按初始SHAP排序尝试调整
+        sorted_shap_indices = sorted(range(len(feature_names)), key=lambda k: -abs(shap_values_array[k]))
+        
         made_adjustment_this_iteration = False
         
-        for i_pot in range(min(max_features_to_consider_per_iteration, len(feature_potentials))):
-            idx, shap_val, current_val, original_val = feature_potentials[i_pot]
+        for idx in sorted_shap_indices:
             feature_name = feature_names[idx]
+            original_val = original_values_np[idx]
+            current_val_for_step = current_adjusted_values[idx]
 
-            # 定义此特征的极宽松边界
-            lower_bound = original_val - abs(original_val * max_feature_adjustment_ratio) if original_val != 0 else -min_absolute_change_for_zero_original
-            upper_bound = original_val + abs(original_val * max_feature_adjustment_ratio) if original_val != 0 else min_absolute_change_for_zero_original
+            prob_before_this_feature_adjust = clf.predict_proba(current_adjusted_values.reshape(1, -1))[0, 1]
+            if prob_before_this_feature_adjust >= effective_target_prob: # 内部循环中也检查是否已达标
+                made_adjustment_this_iteration = True # 标记一下，以便外部循环可以break
+                break
 
-            # 确定理想调整方向
-            adjustment_direction = 1.0 if shap_val > 0 else -1.0 # 如果SHAP>0想增加，SHAP<0想减少
-            
-            # 尝试一个“大胆”的调整步长，例如该特征原始值的10% 或一个固定值
-            step_size = abs(original_val * 0.10) if original_val != 0 else 1.0
-            step_size = max(step_size, 0.01) # 保证最小步长
+            delta = 0.001 
+            temp_for_sensitivity = current_adjusted_values.copy()
+            temp_for_sensitivity[idx] += delta
+            prob_after_delta = clf.predict_proba(temp_for_sensitivity.reshape(1, -1))[0, 1]
+            sensitivity = (prob_after_delta - prob_before_this_feature_adjust) / delta
 
-            potential_change = adjustment_direction * step_size
-            
-            # 确保调整后的值在极宽松边界内
-            new_val_candidate = current_val + potential_change
-            new_val_clipped = np.clip(new_val_candidate, lower_bound, upper_bound)
-            
-            actual_change_this_step = new_val_clipped - current_val
-
-            if abs(actual_change_this_step) < 1e-5: # 调整量过小或已达边界
+            if abs(sensitivity) < 1e-8 or math.isnan(sensitivity) or math.isinf(sensitivity):
+                app.logger.debug(f"迭代 {iteration+1}, 特征 {feature_name}: 敏感度无效 ({sensitivity:.2e}), 跳过。")
                 continue
 
-            # 模拟应用此调整，看概率变化
-            temp_adjusted_values = current_adjusted_values.copy()
-            temp_adjusted_values[idx] = new_val_clipped
-            prob_after_step = clf.predict_proba(temp_adjusted_values.reshape(1, -1))[0, 1]
+            # 目标是弥补剩余的概率差距，或者至少达到一个最小提升
+            target_prob_gain_for_this_feature_step = max(min_meaningful_prob_change_per_step, (effective_target_prob - prob_before_this_feature_adjust) * 0.2) # 尝试弥补20%的差距
+            target_prob_gain_for_this_feature_step = min(target_prob_gain_for_this_feature_step, (effective_target_prob - prob_before_this_feature_adjust) )
+
+
+            needed_feature_change_for_step = target_prob_gain_for_this_feature_step / sensitivity
             
-            prob_improvement_this_step = prob_after_step - current_prob_iter
+            # 定义此特征的“理论最大”调整边界 (基于原始值)
+            lower_bound_overall = original_val - abs(original_val * max_abs_change_ratio_overall) if original_val != 0 else -min_absolute_change_for_zero_original_overall
+            upper_bound_overall = original_val + abs(original_val * max_abs_change_ratio_overall) if original_val != 0 else min_absolute_change_for_zero_original_overall
 
-            # 如果这一步确实带来了概率提升（或至少没有显著降低且是朝正确方向努力）
-            if prob_improvement_this_step > -1e-4 : # 允许微小的负向波动
-                current_adjusted_values[idx] = new_val_clipped # 正式应用调整
-                made_adjustment_this_iteration = True
-                
-                # 更新累积调整信息
-                cumulative_adjustments_dict[feature_name] = {
-                    'current_value': float(original_val),
-                    'adjustment': float(current_adjusted_values[idx] - original_val),
-                    'new_value': float(current_adjusted_values[idx]),
-                    'expected_gain_this_step': "迭代调整中" 
-                }
-                current_prob_iter = prob_after_step # 更新当前概率，为下一个特征调整做准备
-                if current_prob_iter >= effective_target_prob: break # 已达标，跳出内层循环
+            # 计算单步调整量，并确保调整后的值不超过全局边界
+            potential_new_value = current_val_for_step + needed_feature_change_for_step
+            clipped_new_value = np.clip(potential_new_value, lower_bound_overall, upper_bound_overall)
+            actual_feature_change_this_step = clipped_new_value - current_val_for_step
+            
+            if abs(actual_feature_change_this_step) < absolute_min_feature_change_step:
+                app.logger.debug(f"迭代 {iteration+1}, 特征 {feature_name}: 计算的调整量过小 ({actual_feature_change_this_step:.2e}), 跳过。")
+                continue
+            
+            current_adjusted_values[idx] += actual_feature_change_this_step
+            made_adjustment_this_iteration = True
+            
+            prob_after_this_feature_adjust = clf.predict_proba(current_adjusted_values.reshape(1, -1))[0, 1]
+            actual_gain_this_step = prob_after_this_feature_adjust - prob_before_this_feature_adjust
 
-        if not made_adjustment_this_iteration or current_prob_iter >= effective_target_prob:
-            break # 如果一轮没调整或已达标，跳出外层循环
+            display_gain = 0.0
+            if not (math.isnan(actual_gain_this_step) or math.isinf(actual_gain_this_step)):
+                display_gain = actual_gain_this_step
+            else:
+                 app.logger.warning(f"特征 {feature_name} 的预期贡献计算为NaN/inf，显示为0。Sensitivity: {sensitivity}, Change: {actual_feature_change_this_step}")
+
+
+            cumulative_adjustments_info[feature_name] = {
+                'current_value': float(original_val),
+                'adjustment': float(current_adjusted_values[idx] - original_val),
+                'new_value': float(current_adjusted_values[idx]),
+                'expected_gain_this_step': display_gain 
+            }
+        
+        if not made_adjustment_this_iteration: break # 如果一轮迭代没有任何有效调整，则停止
             
     final_prob_ok = clf.predict_proba(current_adjusted_values.reshape(1, -1))[0, 1]
     
     message = ""
     if final_prob_ok >= effective_target_prob:
         message = f"调整建议已生成。调整后样本预测合格概率为: {final_prob_ok:.3f} (目标: ≥{target_ok_prob:.3f})。"
-        if not cumulative_adjustments_dict and initial_is_ng : # 如果没做任何调整就达标了
-             message = f"样本虽初判为NG（初始概率{initial_prob_ok:.3f}），但其概率已满足或超过目标 {target_ok_prob:.3f}，无需调整。"
-    else:
-        message = f"已尝试在极大范围内调整特征（最多{max_iterations_total}轮迭代，特征值可变动达原始值的+/-{max_feature_adjustment_ratio*100}%）。"
-        if cumulative_adjustments_dict:
+        if not cumulative_adjustments_info and initial_is_ng :
+             message = f"样本虽初判为NG（初始概率{initial_prob_ok:.3f}），但其概率已满足或超过目标 {target_ok_prob:.3f}，无需特定调整。"
+    else: # 未达到目标
+        message = f"已尝试在极大范围内调整特征（{iteration+1}轮迭代）。"
+        if cumulative_adjustments_info:
              message += f"调整后样本预测合格概率为: {final_prob_ok:.3f}，仍未达到目标 {target_ok_prob:.3f}。"
-        else:
+        else: # 没有任何调整被记录，但仍未达标
              message += f"未能找到任何有效的调整组合使样本达到合格标准（当前概率{initial_prob_ok:.3f}，目标{target_ok_prob:.3f}）。"
         message += " 这可能表示模型对此特定NG样本的判定非常顽固，或所有特征的调整都无法有效提升其合格概率。建议人工复核此样本，或评估模型对此类样本的泛化能力。"
 
-    return cumulative_adjustments_dict, float(final_prob_ok), message
+    return cumulative_adjustments_info, float(final_prob_ok), message
 
-# --- Routes (与上一版v6一致，除了调用新的调整函数 calculate_adjustment_guaranteed_final) ---
+# --- Routes (与上一版v7一致，除了调用新的调整函数 calculate_adjustment_guaranteed_final_v2) ---
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def index():
-    # ... (与上一版v6 GET部分完全一致)
+    # ... (与上一版v7 GET部分完全一致)
     global model_cache
     if request.method == 'HEAD': return make_response('', 200)
     if request.method == 'GET':
@@ -242,7 +241,7 @@ def index():
             error_msg=model_cache.pop('error', None), field_labels=FIELD_LABELS
         )
     if request.method == 'POST':
-        # ... (与上一版v6 POST部分完全一致)
+        # ... (与上一版v7 POST部分完全一致)
         model_cache.clear()
         if 'file' not in request.files:
             model_cache['error'] = "未选择文件"; return redirect(url_for('index'))
@@ -283,7 +282,7 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # ... (与上一版v6 predict部分完全一致)
+    # ... (与上一版v7 predict部分完全一致)
     global model_cache
     if 'clf' not in model_cache: return jsonify({'error': '请先上传并训练模型。'}), 400
     try:
@@ -324,7 +323,7 @@ def predict():
 
 @app.route('/adjust_single', methods=['POST'])
 def adjust_single():
-    # ... (与上一版v6 adjust_single部分一致，但调用新的 calculate_adjustment_guaranteed_final)
+    # ... (与上一版v7 adjust_single部分一致，但调用新的 calculate_adjustment_guaranteed_final_v2)
     global model_cache
     if 'clf' not in model_cache: return jsonify({'error': '请先上传并训练模型。'}), 400
     try:
@@ -340,7 +339,7 @@ def adjust_single():
         current_values_np_array = np.array([input_data_dict[f] for f in features], dtype=float)
         shap_values_np_array = np.array(shap_values_list, dtype=float)
         
-        adjustments, final_prob_after_adjustment, message = calculate_adjustment_guaranteed_final(
+        adjustments, final_prob_after_adjustment, message = calculate_adjustment_guaranteed_final_v2(
             clf, current_values_np_array, shap_values_np_array, threshold, features, initial_is_ng
         )
         return jsonify({
@@ -355,3 +354,4 @@ def adjust_single():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
