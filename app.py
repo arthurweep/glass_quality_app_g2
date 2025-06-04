@@ -7,8 +7,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-# 使用Matplotlib默认英文字体，不再尝试设置中文，以保证兼容性
-plt.rcParams['axes.unicode_minus'] = False # 解决负号显示问题
+# 使用Matplotlib默认英文字体
+plt.rcParams['axes.unicode_minus'] = False
 
 import shap
 import xgboost as xgb
@@ -21,7 +21,7 @@ app.secret_key = os.urandom(24)
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
 
-# 字段中文名映射，主要用于HTML模板中的文本显示
+# 字段中文名映射，仅用于HTML文本显示
 FIELD_LABELS = {
     "F_cut_act": "刀头实际压力",
     "v_cut_act": "切割实际速度",
@@ -31,7 +31,6 @@ FIELD_LABELS = {
     "P_cool_act": "冷却水压力",
     "t_glass_meas": "玻璃厚度"
 }
-
 model_cache = {}
 
 def fig_to_base64(fig):
@@ -42,35 +41,60 @@ def fig_to_base64(fig):
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 def generate_shap_waterfall_base64(shap_explanation_object_with_english_names):
-    fig = plt.figure(figsize=(10, 7)) # 调整大小以更好显示英文标签
+    fig = plt.figure(figsize=(10, 7))
     shap.plots.waterfall(shap_explanation_object_with_english_names, show=False, max_display=10)
-    plt.title("SHAP Waterfall Plot (Feature Contributions to OK Probability)", fontsize=14) # 英文标题
+    plt.title("SHAP Waterfall Plot (Feature Contributions)", fontsize=14)
     plt.tight_layout()
     return fig_to_base64(fig)
 
 def generate_feature_importance_plot(clf, feature_names_original_english):
     booster = clf.get_booster()
-    booster.feature_names = feature_names_original_english
+    # 确保booster的feature_names与训练时一致（通常XGBoost内部会处理）
+    # booster.feature_names = feature_names_original_english # 通常不需要，除非get_score返回的是f0, f1...
+    
     importance_scores = booster.get_score(importance_type='weight')
     if not importance_scores:
-        app.logger.warning("无法获取特征重要性分数。")
         return None
-    sorted_importance = sorted(importance_scores.items(), key=lambda item: item[1], reverse=True)
+
+    # 如果get_score返回的是f0, f1...形式的键，我们需要映射回原始特征名
+    # 假设feature_names_original_english的顺序与模型内部特征顺序一致
+    mapped_importance = {}
+    for i, f_name in enumerate(feature_names_original_english):
+        internal_f_name = f"f{i}" # XGBoost内部可能使用的名称
+        if internal_f_name in importance_scores:
+            mapped_importance[f_name] = importance_scores[internal_f_name]
+        elif f_name in importance_scores: # 如果直接返回了原始特征名
+             mapped_importance[f_name] = importance_scores[f_name]
+
+
+    if not mapped_importance: # 如果映射后为空，尝试直接使用importance_scores
+        if all(isinstance(k, str) and k.startswith('f') and k[1:].isdigit() for k in importance_scores.keys()):
+             # 如果还是f0, f1...形式，记录警告，但继续尝试（可能绘制的是f0, f1...）
+            app.logger.warning("Feature importance keys are f0, f1... and could not be mapped to original names for plotting. Plotting with f-scores.")
+            mapped_importance = importance_scores # 回退
+        else: # 如果键已经是字符串特征名
+            mapped_importance = importance_scores
+
+
+    sorted_importance = sorted(mapped_importance.items(), key=lambda item: item[1], reverse=True)
     num_features_to_display = min(len(sorted_importance), 10)
     top_features = sorted_importance[:num_features_to_display]
+    
     feature_labels_for_plot_english = [f[0] for f in top_features] 
     scores_for_plot = [float(f[1]) for f in top_features]
-    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    fig, ax = plt.subplots(figsize=(10, 8)) # 增加高度给标签
     ax.barh(range(len(scores_for_plot)), scores_for_plot, align='center')
     ax.set_yticks(range(len(scores_for_plot)))
-    ax.set_yticklabels(feature_labels_for_plot_english) # 英文Y轴标签
+    ax.set_yticklabels(feature_labels_for_plot_english, fontsize=9) # 英文Y轴标签
     ax.invert_yaxis()
-    ax.set_xlabel('Importance Score (Weight)', fontsize=12) # 英文标签
-    ax.set_title('Feature Importance Ranking', fontsize=16) # 英文标题
+    ax.set_xlabel('Importance Score (Weight)', fontsize=12)
+    ax.set_title('Feature Importance Ranking', fontsize=16)
     plt.tight_layout()
     return fig_to_base64(fig)
 
 def find_best_threshold_f1(clf, X, y):
+    # ... (与上一版逻辑一致)
     probs_ok = clf.predict_proba(X)[:, 1]
     best_f1_macro, best_thresh = 0.0, 0.5
     best_metrics_at_thresh = {}
@@ -90,9 +114,7 @@ def find_best_threshold_f1(clf, X, y):
                 'f1_ng': f1_score(y, y_pred, pos_label=0, zero_division=0),
                 'threshold': t
             }
-    if not best_metrics_at_thresh: # 如果循环没有找到任何F1>0的阈值（极端情况）
-        app.logger.warning(f"未能通过F1分数找到优化阈值，将使用默认0.5或最后计算的阈值。")
-        # 至少返回一个包含所有键的字典
+    if not best_metrics_at_thresh:
         dummy_preds = (probs_ok >= 0.5).astype(int)
         best_metrics_at_thresh = {
             'accuracy': accuracy_score(y, dummy_preds), 'recall_ok': recall_score(y, dummy_preds, pos_label=1, zero_division=0),
@@ -101,118 +123,107 @@ def find_best_threshold_f1(clf, X, y):
             'f1_ng': f1_score(y, dummy_preds, pos_label=0, zero_division=0), 'threshold': 0.5
         }
         best_thresh = 0.5
-
     final_threshold = float(best_metrics_at_thresh.get('threshold', best_thresh))
     final_metrics = {k: float(v) for k, v in best_metrics_at_thresh.items()}
-    final_metrics['threshold'] = final_threshold # 确保最终阈值是这个
+    final_metrics['threshold'] = final_threshold
     return final_threshold, final_metrics
+
 
 def calculate_precise_adjustment(clf, current_values_array, shap_values_array, threshold_ok_prob, feature_names, initial_is_ng):
     adjustments = {}
     current_values_np = np.array(current_values_array, dtype=float).flatten()
     shap_values_np = np.array(shap_values_array, dtype=float).flatten()
+    
+    # 初始预测概率
     current_prob_ok = clf.predict_proba(current_values_np.reshape(1, -1))[0, 1]
     
-    # 即使样本最初是NG，如果当前概率（可能是由于浮点运算或之前的微小调整）已经略高于阈值，
-    # 我们仍然希望算法给出“巩固”或“进一步优化”的建议，而不是直接说“已合格”。
-    # required_boost 现在可以是负数，表示当前已超过阈值多少。
+    # 即使 initial_is_ng 为 True 且 current_prob_ok 可能已略高于 threshold，
+    # 调整目标仍然是使概率达到或超过 threshold_ok_prob。
+    # 如果当前已经远超，则可能不需要大幅调整。
     required_boost = float(threshold_ok_prob - current_prob_ok)
     
-    # 只有当样本最初就不是NG，并且当前概率也合格时，才不给建议。
+    # 如果最初判定为OK，并且当前概率已经合格，则不进行调整。
     if not initial_is_ng and current_prob_ok >= threshold_ok_prob:
-        return adjustments, float(current_prob_ok), "当前已合格，无需调整。"
+        return adjustments, float(current_prob_ok), "Sample is already predicted as OK and meets/exceeds threshold."
 
-    # 如果最初是NG，但现在已非常接近或略超阈值 (required_boost非常小或负)，我们仍然要尝试。
-    # 目标是让required_boost变为0或更小（即概率达到或超过阈值）
-    
+    # 如果最初判定为NG，但当前概率已经显著高于阈值 (例如，高出0.05)，
+    # 也可能不需要进一步“提升”调整，而是可以考虑“巩固性”调整或不调整。
+    # 但为了确保总有建议，我们继续，除非调整无法带来任何提升。
+    # if initial_is_ng and current_prob_ok > threshold_ok_prob + 0.05:
+    #     return adjustments, float(current_prob_ok), "Sample was NG, but current probability significantly exceeds threshold. No further 'improvement' adjustment needed."
+
     sorted_features_by_shap = sorted(enumerate(shap_values_np), key=lambda x: -abs(x[1]))
     adjusted_values_for_final_check = current_values_np.copy()
-    adjustment_made_count = 0 # 计数实际发生的调整
+    adjustment_made_count = 0
 
     for idx, shap_val_for_feature in sorted_features_by_shap:
-        # 如果已经做了足够调整使得required_boost变为负数（即远超阈值），可以停止
-        if required_boost <= -0.02 and adjustment_made_count > 0 : # -0.02 意味着超过阈值2%
-             break
-        if adjustment_made_count >= 3 and required_boost <= 0: # 最多调整3个特征如果已达标
+        # 计算当前累积调整后的概率，看是否还需要提升
+        prob_after_previous_adjustments = clf.predict_proba(adjusted_values_for_final_check.reshape(1, -1))[0, 1]
+        current_required_boost = float(threshold_ok_prob - prob_after_previous_adjustments)
+
+        if current_required_boost <= 0 and adjustment_made_count > 0 and initial_is_ng:
+            # 如果最初是NG，且做过调整后已达标，可以考虑停止或做一轮巩固
+            break 
+        if adjustment_made_count >= 3 and current_required_boost <= 0.01 and initial_is_ng: # 最多调整3个特征如果已接近达标
             break
 
         feature_name = feature_names[idx]
         delta = 0.001 
-        temp_values_plus_delta = current_values_np.copy()
+        
+        # 敏感度计算基于当前已调整的值
+        temp_values_plus_delta = adjusted_values_for_final_check.copy()
         temp_values_plus_delta[idx] += delta
-        prob_after_delta_change = clf.predict_proba(temp_values_plus_delta.reshape(1, -1))[0, 1]
-        # 敏感度计算应基于当前累积调整后的概率，而非原始current_prob_ok
-        # 但为了简化，这里仍然用原始current_prob_ok计算一次性敏感度，后续通过迭代弥补
-        current_prob_for_sensitivity = clf.predict_proba(adjusted_values_for_final_check.reshape(1, -1))[0, 1]
-        prob_after_delta_on_adjusted = clf.predict_proba( (adjusted_values_for_final_check + (np.eye(len(features))[idx] * delta)).reshape(1,-1) )[0,1]
-        sensitivity = (prob_after_delta_on_adjusted - current_prob_for_sensitivity) / delta
+        prob_after_delta_on_adjusted = clf.predict_proba(temp_values_plus_delta.reshape(1, -1))[0, 1]
+        sensitivity = (prob_after_delta_on_adjusted - prob_after_previous_adjustments) / delta
         
-        if abs(sensitivity) < 1e-6: 
+        if abs(sensitivity) < 1e-7: # 提高敏感度阈值，避免除以极小数
             continue
-        
-        # 目标是让 current_prob_for_sensitivity + (sensitivity * change) >= threshold_ok_prob
-        # (sensitivity * change) >= threshold_ok_prob - current_prob_for_sensitivity
-        # change >= (threshold_ok_prob - current_prob_for_sensitivity) / sensitivity
-        effective_required_boost = threshold_ok_prob - current_prob_for_sensitivity
-
-        if effective_required_boost <= 0 and initial_is_ng: # 如果已达标但最初是NG，做一次巩固性调整
-            # 如果shap值是负的（降低OK概率的特征），我们应该减少它
-            # 如果shap值是正的（提高OK概率的特征），我们应该增加它
-            # 目标是让它更“OK”一点
-            # 这里的逻辑是：如果一个特征对“不合格”贡献大（SHAP值推动远离OK），我们就反向调整它
-            # 如果SHAP < 0，说明这个特征使样本更NG，尝试增加其值。
-            # 如果SHAP > 0，说明这个特征使样本更OK，如果还想巩固，也尝试增加其值（或保持）。
-            # 这里简单地尝试推动概率增加0.01
-            effective_required_boost = 0.01 
-
-
-        needed_feature_change = effective_required_boost / sensitivity
+            
+        needed_feature_change = current_required_boost / sensitivity
         
         max_abs_change_ratio = 0.40 
-        current_feature_val = current_values_np[idx] # 用原始值计算调整范围
-        max_abs_change_value = abs(current_feature_val * max_abs_change_ratio) if current_feature_val != 0 else 0.20
+        # 注意：这里的current_feature_val应该是原始值，而不是adjusted_values_for_final_check[idx]
+        # 因为调整上限是基于原始值的。
+        original_feature_val = current_values_np[idx] 
+        max_abs_change_value = abs(original_feature_val * max_abs_change_ratio) if original_feature_val != 0 else 0.20
         
         actual_feature_change = float(np.clip(needed_feature_change, -max_abs_change_value, max_abs_change_value))
         
         if abs(actual_feature_change) < 1e-5:
             continue
 
-        actual_prob_gain_step = float(sensitivity * actual_feature_change)
+        # 预估这一步的概率增益
+        expected_gain_this_step = float(sensitivity * actual_feature_change)
         
-        # 更新累积调整的值
         adjusted_values_for_final_check[idx] += actual_feature_change
         
         adjustments[feature_name] = {
-            'current_value': float(current_values_np[idx]),
+            'current_value': float(current_values_np[idx]), # 始终显示原始值
             'adjustment': actual_feature_change,
-            'new_value': float(adjusted_values_for_final_check[idx]),
-            'expected_gain': actual_prob_gain_step
+            'new_value': float(adjusted_values_for_final_check[idx]), # 累积调整后的值
+            'expected_gain': expected_gain_this_step
         }
         adjustment_made_count +=1
-        # 更新 required_boost 是基于最新的整体概率和目标阈值的差
-        # 这里简化为只看累积的概率增益，或者在循环外重新计算最终概率
             
     final_prob_after_all_adjustments = float(clf.predict_proba(adjusted_values_for_final_check.reshape(1, -1))[0, 1])
     
     message = None
-    if not adjustments and initial_is_ng: # 如果最初是NG但没有生成任何调整
-        current_final_prob = clf.predict_proba(current_values_np.reshape(1, -1))[0, 1] # 重新获取当前概率
-        if current_final_prob >= threshold_ok_prob:
-             message = "样本当前预测概率已达到或超过合格阈值，无需调整。"
-        elif abs(current_final_prob - threshold_ok_prob) < 0.02: # 差距小于2%
-            message = "当前状态已非常接近合格标准，建议的微小调整可能效果不显著或难以实现。"
+    if not adjustments and initial_is_ng:
+        current_final_prob_no_adjust = clf.predict_proba(current_values_np.reshape(1, -1))[0, 1]
+        if current_final_prob_no_adjust >= threshold_ok_prob:
+             message = "Sample was initially NG, but its current probability already meets/exceeds threshold. No adjustment needed."
+        elif abs(current_final_prob_no_adjust - threshold_ok_prob) < 0.02:
+            message = "Sample is very close to the OK threshold. Minor adjustments might not be impactful or practical."
         else:
-            message = "未能计算出有效的调整建议。可能原因：特征对模型输出不敏感、已达调整上限、或模型对此类样本的判定较为固定。"
+            message = "Could not compute effective adjustments. Features might be insensitive, at adjustment limits, or model is firm on this sample."
             
     return adjustments, final_prob_after_all_adjustments, message
 
-# --- Routes ---
+# --- Routes (与上一版逻辑基本一致, 确保所有从模型或NumPy获取的数值在放入JSON响应前都转换为Python原生类型) ---
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def index():
-    # ... (与上一版逻辑一致, 确保所有存入model_cache的metrics数值是Python float)
     global model_cache
-    if request.method == 'HEAD':
-        return make_response('', 200)
+    if request.method == 'HEAD': return make_response('', 200)
     if request.method == 'GET':
         metrics = model_cache.get('metrics', {})
         default_metrics = {
@@ -224,40 +235,30 @@ def index():
         for k, v in final_metrics.items():
             if isinstance(v, (np.float32, np.float64)): final_metrics[k] = float(v)
         return render_template('index.html',
-            show_results=bool(model_cache.get('show_results', False)),
-            filename=model_cache.get('filename', ''),
-            form_inputs=model_cache.get('features', []),
-            default_values=model_cache.get('defaults', {}),
-            model_metrics=final_metrics,
-            feature_plot=model_cache.get('feature_plot', None),
-            error_msg=model_cache.pop('error', None),
-            field_labels=FIELD_LABELS
+            show_results=bool(model_cache.get('show_results', False)), filename=model_cache.get('filename', ''),
+            form_inputs=model_cache.get('features', []), default_values=model_cache.get('defaults', {}),
+            model_metrics=final_metrics, feature_plot=model_cache.get('feature_plot', None),
+            error_msg=model_cache.pop('error', None), field_labels=FIELD_LABELS
         )
     if request.method == 'POST':
         model_cache.clear()
         if 'file' not in request.files:
-            model_cache['error'] = "未选择文件"
-            return redirect(url_for('index'))
+            model_cache['error'] = "未选择文件"; return redirect(url_for('index'))
         file = request.files['file']
         if not file or file.filename == '':
-            model_cache['error'] = "文件无效或文件名为空"
-            return redirect(url_for('index'))
+            model_cache['error'] = "文件无效或文件名为空"; return redirect(url_for('index'))
         try:
-            df = pd.read_csv(file)
-            model_cache['filename'] = file.filename
+            df = pd.read_csv(file); model_cache['filename'] = file.filename
             if "OK_NG" not in df.columns:
-                model_cache['error'] = "CSV文件中必须包含 'OK_NG' 列。"
-                return redirect(url_for('index'))
-            X_raw = df.drop("OK_NG", axis=1)
-            X = X_raw.copy()
+                model_cache['error'] = "CSV文件中必须包含 'OK_NG' 列。"; return redirect(url_for('index'))
+            X_raw = df.drop("OK_NG", axis=1); X = X_raw.copy()
             for col in X.columns: X[col] = pd.to_numeric(X[col], errors='coerce')
             X = X.fillna(X.mean())
             y = pd.to_numeric(df["OK_NG"], errors='coerce').fillna(0).astype(int)
             features = X.columns.tolist()
             clf = xgb.XGBClassifier(
-                n_estimators=150, max_depth=5, learning_rate=0.1,
-                subsample=0.8, colsample_bytree=0.8, gamma=0.1,
-                random_state=42, use_label_encoder=False
+                n_estimators=150, max_depth=5, learning_rate=0.1, subsample=0.8, 
+                colsample_bytree=0.8, gamma=0.1, random_state=42, use_label_encoder=False
             )
             sample_weights = compute_sample_weight(class_weight={0:2.0, 1:1}, y=y)
             clf.fit(X, y, sample_weight=sample_weights)
@@ -280,19 +281,15 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # ... (与上一版逻辑一致, 但要传递 initial_is_ng 给 calculate_precise_adjustment)
     global model_cache
-    if 'clf' not in model_cache:
-        return jsonify({'error': '请先上传并训练模型。'}), 400
+    if 'clf' not in model_cache: return jsonify({'error': '请先上传并训练模型。'}), 400
     try:
-        clf = model_cache['clf']
-        features = model_cache['features']
+        clf = model_cache['clf']; features = model_cache['features']
         threshold = model_cache['metrics']['threshold']
         input_data_dict = {}
         for f_name in features:
             val_str = request.form.get(f_name)
-            if val_str is None or val_str.strip() == '':
-                return jsonify({'error': f'特征 "{FIELD_LABELS.get(f_name, f_name)}" 的值不能为空。'}), 400
+            if val_str is None or val_str.strip() == '': return jsonify({'error': f'特征 "{FIELD_LABELS.get(f_name, f_name)}" 的值不能为空。'}), 400
             try: input_data_dict[f_name] = float(val_str)
             except ValueError: return jsonify({'error': f'特征 "{FIELD_LABELS.get(f_name, f_name)}" 的输入值 "{val_str}" 不是有效的数字。'}), 400
         df_input = pd.DataFrame([input_data_dict], columns=features)
@@ -303,22 +300,21 @@ def predict():
         shap_explanation_obj = explainer(df_input)
         shap_values_for_output = shap_explanation_obj.values[0]
         waterfall_plot_base64 = None
-        if is_ng: # 只有不合格时才考虑生成waterfall图
+        if is_ng:
             base_val_for_waterfall = explainer.expected_value
             if isinstance(base_val_for_waterfall, (np.ndarray, list)):
                  base_val_for_waterfall = base_val_for_waterfall[1] if len(base_val_for_waterfall) == 2 else base_val_for_waterfall[0]
             base_val_for_waterfall = float(base_val_for_waterfall)
             shap_explanation_for_waterfall = shap.Explanation(
                 values=shap_values_for_output.astype(float), base_values=base_val_for_waterfall,
-                data=df_input.iloc[0].values.astype(float), feature_names=features
+                data=df_input.iloc[0].values.astype(float), feature_names=features # Use English names
             )
             waterfall_plot_base64 = generate_shap_waterfall_base64(shap_explanation_for_waterfall)
         response = {
-            'prob': float(round(prob_ok, 3)), 'threshold': float(round(threshold, 3)),
-            'is_ng': is_ng, 'shap_values': [float(round(v, 4)) for v in shap_values_for_output],
+            'prob': float(round(prob_ok, 3)), 'threshold': float(round(threshold, 3)), 'is_ng': is_ng,
+            'shap_values': [float(round(v, 4)) for v in shap_values_for_output],
             'metrics': model_cache['metrics'], 'waterfall': waterfall_plot_base64,
-            'input_data': input_data_dict, # 英文键的输入数据
-            'initial_is_ng_for_adjustment': is_ng # 传递此状态
+            'input_data': input_data_dict, 'initial_is_ng_for_adjustment': is_ng
         }
         return jsonify(response)
     except Exception as e:
@@ -327,20 +323,16 @@ def predict():
 
 @app.route('/adjust_single', methods=['POST'])
 def adjust_single():
-    # ... (与上一版逻辑一致)
     global model_cache
-    if 'clf' not in model_cache:
-        return jsonify({'error': '请先上传并训练模型。'}), 400
+    if 'clf' not in model_cache: return jsonify({'error': '请先上传并训练模型。'}), 400
     try:
-        clf = model_cache['clf']
-        features = model_cache['features']
+        clf = model_cache['clf']; features = model_cache['features']
         threshold = model_cache['metrics']['threshold']
         json_data = request.get_json()
         if not json_data: return jsonify({'error': '请求体为空或不是有效的JSON。'}), 400
         input_data_dict = json_data.get('input_data')
         shap_values_list = json_data.get('shap_values')
-        initial_is_ng = json_data.get('initial_is_ng_for_adjustment', True) # 获取最初的NG状态
-
+        initial_is_ng = json_data.get('initial_is_ng_for_adjustment', True)
         if not input_data_dict or not isinstance(input_data_dict, dict): return jsonify({'error': '缺少或无效的 input_data。'}), 400
         if not shap_values_list or not isinstance(shap_values_list, list) or len(shap_values_list) != len(features): return jsonify({'error': '缺少或无效的 shap_values。'}), 400
         current_values_np_array = np.array([input_data_dict[f] for f in features], dtype=float)
@@ -349,7 +341,7 @@ def adjust_single():
             clf, current_values_np_array, shap_values_np_array, threshold, features, initial_is_ng
         )
         return jsonify({
-            'adjustments': adjustments,
+            'adjustments': adjustments, # Keys are English feature names
             'final_prob_after_adjustment': float(final_prob_after_adjustment),
             'message': message
         })
