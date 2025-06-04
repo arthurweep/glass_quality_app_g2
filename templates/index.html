@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>工业质检智能分析系统 - 全面优化版 v5</title>
+    <title>工业质检智能分析系统 - 全面优化版 v6</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet" />
     <style>
         .waterfall-plot { max-width: 100%; height: auto; }
@@ -16,7 +16,7 @@
 </head>
 <body>
     <div class="container mt-4 mb-5">
-        <h2 class="mb-4 text-center">工业质检智能分析系统 - 全面优化版 v5</h2>
+        <h2 class="mb-4 text-center">工业质检智能分析系统 - 全面优化版 v6</h2>
 
         <!-- 文件上传、模型信息、单样本检测表单部分与上一版相同 -->
         <div class="card mb-4">
@@ -212,8 +212,7 @@
                             }
                             document.getElementById("currentThresholdValue").textContent = data.threshold;
                             const waterfallPlotEl = document.getElementById("waterfallPlot");
-                            // SHAP图现在总是尝试显示
-                            if (data.waterfall) {
+                            if (data.waterfall) { // Waterfall is now always sent if generation is successful
                                 waterfallPlotEl.innerHTML = '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot img-fluid" alt="SHAP Waterfall Plot">';
                             } else {
                                 waterfallPlotEl.innerHTML = '<p class="text-muted small">Waterfall图未能生成。</p>';
@@ -271,7 +270,7 @@
                                     html += "<tr><td>" + adjustmentIndex++ + "</td><td><strong>" + featureDisplayName + "</strong></td><td>" + adjDetails.current_value.toFixed(3) + "</td>" +
                                         '<td class="' + (adjDetails.adjustment >= 0 ? "positive" : "negative") + '">' + (adjDetails.adjustment >= 0 ? "+" : "") + adjDetails.adjustment.toFixed(3) + "</td>" +
                                         "<td>" + adjDetails.new_value.toFixed(3) + "</td>" +
-                                        '<td class="' + (adjDetails.expected_gain >= 0 ? "positive" : "negative") + '">' + (adjDetails.expected_gain >= 0 ? "+" : "") + (adjDetails.expected_gain * 100).toFixed(1) + "%%</td></tr>";
+                                        '<td class="' + (adjDetails.expected_gain_this_step >= 0 ? "positive" : "negative") + '">' + (adjDetails.expected_gain_this_step >= 0 ? "+" : "") + (adjDetails.expected_gain_this_step * 100).toFixed(1) + "%%</td></tr>";
                                 });
                                 let finalProbText = data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment !== undefined ? data.final_prob_after_adjustment.toFixed(3) : "N/A";
                                 let outcomeText = "仍可能不合格";
@@ -285,7 +284,7 @@
                                 html = '<tr><td colspan="6" class="text-center text-muted">' + (data.message || "未能计算出有效的调整建议。") + "</td></tr>";
                                 document.getElementById("finalPrediction").innerHTML = "";
                             }
-                             if(data.message) { // 总是显示message，无论是否有adjustments
+                             if(data.message) { 
                                 document.getElementById("adjustMsg").textContent = data.message;
                             }
                             document.getElementById("adjustmentBody").innerHTML = html;
