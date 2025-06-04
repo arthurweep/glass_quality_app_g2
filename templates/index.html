@@ -1,333 +1,423 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>工业质检智能分析系统 - 最终优化版</title>
-    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>工业质检智能分析系统 - 优化版</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet" />
     <style>
-        .waterfall-plot { max-width: 100%; height: auto; }
-        .adjustment-table td, .adjustment-table th { vertical-align: middle; font-size: 0.9em; }
-        .positive { color: #28a745 !important; font-weight: bold; }
-        .negative { color: #dc3545 !important; font-weight: bold; }
-        .table-sm th, .table-sm td { padding: 0.4rem; }
-        .card-header h5 { margin-bottom: 0; }
+        .waterfall-plot {
+            max-width: 100%;
+            height: auto;
+        }
+        .adjustment-table td,
+        .adjustment-table th {
+            vertical-align: middle;
+            font-size: 0.9em;
+        }
+        .positive {
+            color: #28a745 !important;
+            font-weight: bold;
+        }
+        .negative {
+            color: #dc3545 !important;
+            font-weight: bold;
+        }
+        .table-sm th,
+        .table-sm td {
+            padding: 0.4rem;
+        }
+        .card-header h5 {
+            margin-bottom: 0;
+        }
     </style>
 </head>
 <body>
-<div class="container mt-4 mb-5">
-    <h2 class="mb-4 text-center">工业质检智能分析系统 - 最终优化版</h2>
-    
-    <div class="card mb-4">
-        <div class="card-header bg-primary text-white">
-            <h5>1. 上传训练数据 (CSV格式)</h5>
-        </div>
-        <div class="card-body">
-            {% if error_msg %}
+    <div class="container mt-4 mb-5">
+        <h2 class="mb-4 text-center">工业质检智能分析系统 - 优化版</h2>
+
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5>1. 上传训练数据 (CSV格式)</h5>
+            </div>
+            <div class="card-body">
+                {% if error_msg %}
                 <div class="alert alert-danger">{{ error_msg }}</div>
-            {% endif %}
-            <form method="post" enctype="multipart/form-data" action="{{ url_for('index') }}">
-                <div class="form-group">
-                    <label for="fileUpload">选择文件 (需包含 'OK_NG' 列, 1为OK, 0为NG):</label>
-                    <input type="file" name="file" id="fileUpload" class="form-control-file" required>
-                </div>
-                <button type="submit" class="btn btn-primary btn-block">上传并训练新模型</button>
-            </form>
-            {% if filename %}
+                {% endif %}
+                <form method="post" enctype="multipart/form-data" action="{{ url_for('index') }}">
+                    <div class="form-group">
+                        <label for="fileUpload">选择文件 (需包含 'OK_NG' 列, 1为OK, 0为NG):</label>
+                        <input type="file" name="file" id="fileUpload" class="form-control-file" required />
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">上传并训练新模型</button>
+                </form>
+                {% if filename %}
                 <div class="mt-3">
                     <span class="badge badge-success p-2">当前使用模型基于文件: {{ filename }}</span>
                     {% if model_metrics and model_metrics.threshold is not none %}
-                        <span class="badge badge-info p-2 ml-2">判定阈值 (OK概率 ≥): {{ "%.3f"|format(model_metrics.threshold) }}</span>
+                    <span class="badge badge-info p-2 ml-2">判定阈值 (OK概率 ≥): {{ "%.3f"|format(model_metrics.threshold) }}</span>
                     {% endif %}
                 </div>
-            {% endif %}
-        </div>
-    </div>
-
-    {% if show_results %}
-    <div class="card mb-4">
-        <div class="card-header bg-info text-white">
-            <h5>2. 当前模型性能概览</h5>
-        </div>
-        <div class="card-body">
-            <div class="row">
-                <div class="col-md-5">
-                    <h6>特征重要性排序 (XGBoost Built-in):</h6>
-                    {% if feature_plot %}
-                        <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid" alt="特征重要性图">
-                    {% else %}
-                        <p class="text-muted">特征重要性图表未生成。</p>
-                    {% endif %}
-                </div>
-                <div class="col-md-7">
-                    {% if model_metrics %}
-                    <h6>模型配置参数:</h6>
-                    <ul class="list-unstyled">
-                        <li><strong>决策树数量 (n_estimators):</strong> {{ model_metrics.trees }}</li>
-                        <li><strong>最大深度 (max_depth):</strong> {{ model_metrics.depth }}</li>
-                        <li><strong>学习率 (learning_rate):</strong> {{ "%.3f"|format(model_metrics.lr) }}</li>
-                    </ul>
-                    <h6 class="mt-3">基于训练数据的性能指标 (使用阈值 {{ "%.3f"|format(model_metrics.threshold) }}):</h6>
-                    <table class="table table-sm table-hover table-bordered">
-                        <thead class="thead-light">
-                            <tr><th>指标</th><th>值</th></tr>
-                        </thead>
-                        <tbody>
-                            <tr><td>整体准确率 (Accuracy)</td><td>{{ "%.2f%%"|format(model_metrics.accuracy*100) }}</td></tr>
-                            <tr><td>合格(OK)样本召回率 (Recall OK)</td><td>{{ "%.2f%%"|format(model_metrics.recall_ok*100) }}</td></tr>
-                            <tr><td>不合格(NG)样本召回率 (Recall NG)</td><td><strong class="text-danger">{{ "%.2f%%"|format(model_metrics.recall_ng*100) }}</strong></td></tr>
-                            <tr><td>合格(OK)样本精确率 (Precision OK)</td><td>{{ "%.2f%%"|format(model_metrics.precision_ok*100) }}</td></tr>
-                            <tr><td>不合格(NG)样本精确率 (Precision NG)</td><td><strong class="text-primary">{{ "%.2f%%"|format(model_metrics.precision_ng*100) }}</strong></td></tr>
-                            <tr><td>合格(OK)样本F1分数 (F1 OK)</td><td>{{ "%.3f"|format(model_metrics.f1_ok) }}</td></tr>
-                            <tr><td>不合格(NG)样本F1分数 (F1 NG)</td><td>{{ "%.3f"|format(model_metrics.f1_ng) }}</td></tr>
-                        </tbody>
-                    </table>
-                    {% else %}
-                    <p class="text-muted">模型指标数据未生成。</p>
-                    {% endif %}
-                </div>
+                {% endif %}
             </div>
         </div>
-    </div>
 
-    <div class="card mb-4">
-        <div class="card-header bg-warning">
-            <h5>3. 单一样本检测与智能优化建议</h5>
-        </div>
-        <div class="card-body">
-            <form id="predictForm">
-                {% for feature_key in form_inputs %} {# 使用 feature_key 迭代，因为 form_inputs 是原始英文名列表 #}
-                <div class="form-group row">
-                    <label class="col-sm-4 col-form-label text-right">{{ field_labels[feature_key] if feature_key in field_labels else feature_key }}:</label>
-                    <div class="col-sm-8">
-                        <input type="number" step="any" class="form-control form-control-sm" 
-                               name="{{ feature_key }}" {# name 属性使用原始英文名，与后端对应 #}
-                               value="{{ default_values[feature_key]|round(3) if default_values[feature_key] is not none else '' }}" 
-                               required
-                               placeholder="请输入“{{ field_labels[feature_key] if feature_key in field_labels else feature_key }}”的值">
-                    </div>
-                </div>
-                {% endfor %}
-                <button type="submit" class="btn btn-warning btn-lg btn-block mt-3">开始检测与分析</button>
-            </form>
-        </div>
-    </div>
-
-    <div id="resultsSection" style="display:none;">
+        {% if show_results %}
         <div class="card mb-4">
-            <div id="resultCardHeader" class="card-header text-white"> 
-                <h5 id="resultTitle">检测结果详情</h5>
+            <div class="card-header bg-info text-white">
+                <h5>2. 当前模型性能概览</h5>
             </div>
             <div class="card-body">
                 <div class="row">
-                    <div class="col-lg-5">
-                        <h6>基础判定:</h6>
-                        <p>预测合格(OK)概率: <strong id="probValue" class="h4"></strong></p>
-                        <p>判定结果: <strong id="resultLabel" class="h4"></strong></p>
-                         <p class="text-muted small">当前模型判定阈值: <span id="currentThresholdValue"></span></p>
+                    <div class="col-md-5">
+                        <h6>特征重要性排序 (XGBoost Built-in):</h6>
+                        {% if feature_plot %}
+                        <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid" alt="特征重要性图" />
+                        {% else %}
+                        <p class="text-muted">特征重要性图表未生成。</p>
+                        {% endif %}
                     </div>
-                    <div class="col-lg-7" id="waterfallPlotContainer">
-                        <h6>SHAP Waterfall图 (各特征对“合格”概率的贡献):</h6>
-                        <div id="waterfallPlot"><p class="text-muted">等待分析...</p></div>
+                    <div class="col-md-7">
+                        {% if model_metrics %}
+                        <h6>模型配置参数:</h6>
+                        <ul class="list-unstyled">
+                            <li><strong>决策树数量 (n_estimators):</strong> {{ model_metrics.trees }}</li>
+                            <li><strong>最大深度 (max_depth):</strong> {{ model_metrics.depth }}</li>
+                            <li><strong>学习率 (learning_rate):</strong> {{ "%.3f"|format(model_metrics.lr) }}</li>
+                        </ul>
+                        <h6 class="mt-3">基于训练数据的性能指标 (使用阈值 {{ "%.3f"|format(model_metrics.threshold) }}):</h6>
+                        <table class="table table-sm table-hover table-bordered">
+                            <thead class="thead-light">
+                                <tr>
+                                    <th>指标</th>
+                                    <th>值</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>整体准确率 (Accuracy)</td>
+                                    <td>{{ "%.2f%%"|format(model_metrics.accuracy*100) }}</td>
+                                </tr>
+                                <tr>
+                                    <td>合格(OK)样本召回率 (Recall OK)</td>
+                                    <td>{{ "%.2f%%"|format(model_metrics.recall_ok*100) }}</td>
+                                </tr>
+                                <tr>
+                                    <td>不合格(NG)样本召回率 (Recall NG)</td>
+                                    <td><strong class="text-danger">{{ "%.2f%%"|format(model_metrics.recall_ng*100) }}</strong></td>
+                                </tr>
+                                <tr>
+                                    <td>合格(OK)样本精确率 (Precision OK)</td>
+                                    <td>{{ "%.2f%%"|format(model_metrics.precision_ok*100) }}</td>
+                                </tr>
+                                <tr>
+                                    <td>不合格(NG)样本精确率 (Precision NG)</td>
+                                    <td><strong class="text-primary">{{ "%.2f%%"|format(model_metrics.precision_ng*100) }}</strong></td>
+                                </tr>
+                                <tr>
+                                    <td>合格(OK)样本F1分数 (F1 OK)</td>
+                                    <td>{{ "%.3f"|format(model_metrics.f1_ok) }}</td>
+                                </tr>
+                                <tr>
+                                    <td>不合格(NG)样本F1分数 (F1 NG)</td>
+                                    <td>{{ "%.3f"|format(model_metrics.f1_ng) }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        {% else %}
+                        <p class="text-muted">模型指标数据未生成。</p>
+                        {% endif %}
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="text-center mt-3 mb-3" id="adjustBtnContainer" style="display:none;">
-            <button class="btn btn-info btn-lg" id="triggerAdjustBtn">获取智能优化建议</button>
-        </div>
-
-        <div id="adjustmentCard" class="card mb-4" style="display:none;">
-            <div class="card-header bg-info text-white">
-                <h5>智能优化建议 (如何使样本合格)</h5>
+        <div class="card mb-4">
+            <div class="card-header bg-warning">
+                <h5>3. 单一样本检测与智能优化建议</h5>
             </div>
             <div class="card-body">
-                <p>以下建议旨在将样本的合格(OK)概率提升至阈值 <span id="targetThresholdForAdjustment"></span> 以上。</p>
-                <table class="table table-bordered table-hover table-sm adjustment-table">
-                    <thead class="thead-light">
-                        <tr>
-                            <th>#</th>
-                            <th>待调整特征 (中文名)</th>
-                            <th>当前值</th>
-                            <th>建议调整量</th>
-                            <th>调整后目标值</th>
-                            <th>此调整对OK概率的预期贡献</th>
-                        </tr>
-                    </thead>
-                    <tbody id="adjustmentBody">
-                    </tbody>
-                </table>
-                <div id="finalPrediction" class="mt-3 alert alert-light"></div>
+                <form id="predictForm">
+                    {% for feature_key in form_inputs %}
+                    <div class="form-group row">
+                        <label class="col-sm-4 col-form-label text-right">{{
+                            field_labels[feature_key] if feature_key in field_labels else feature_key
+                        }}:</label>
+                        <div class="col-sm-8">
+                            <input type="number" step="any" class="form-control form-control-sm" name="{{ feature_key }}"
+                                value="{{ default_values[feature_key]|round(3) if default_values[feature_key] is not none else '' }}"
+                                required
+                                placeholder="请输入{{ field_labels[feature_key] if feature_key in field_labels else feature_key }}的值" />
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <button type="submit" class="btn btn-warning btn-lg btn-block mt-3">开始检测与分析</button>
+                </form>
             </div>
         </div>
+
+        <div id="resultsSection" style="display:none;">
+            <div class="card mb-4">
+                <div id="resultCardHeader" class="card-header text-white">
+                    <h5 id="resultTitle">检测结果详情</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-lg-5">
+                            <h6>基础判定:</h6>
+                            <p>预测合格(OK)概率: <strong id="probValue" class="h4"></strong></p>
+                            <p>判定结果: <strong id="resultLabel" class="h4"></strong></p>
+                            <p class="text-muted small">当前模型判定阈值: <span id="currentThresholdValue"></span></p>
+                        </div>
+                        <div class="col-lg-7" id="waterfallPlotContainer">
+                            <h6>SHAP Waterfall图 (各特征对“合格”概率的贡献):</h6>
+                            <div id="waterfallPlot"><small class="text-muted">等待分析...</small></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="text-center mt-3 mb-3" id="adjustBtnContainer" style="display:none;">
+                <button class="btn btn-info btn-lg" id="triggerAdjustBtn">获取智能优化建议</button>
+            </div>
+
+            <div id="adjustmentCard" class="card mb-4" style="display:none;">
+                <div class="card-header bg-info text-white">
+                    <h5>智能优化建议 (如何使样本合格)</h5>
+                </div>
+                <div class="card-body">
+                    <p>以下建议旨在将样本的合格(OK)概率提升至阈值 <span id="targetThresholdForAdjustment"></span> 以上。</p>
+                    <table class="table table-bordered table-hover table-sm adjustment-table">
+                        <thead class="thead-light">
+                            <tr>
+                                <th>#</th>
+                                <th>待调整特征 (中文名)</th>
+                                <th>当前值</th>
+                                <th>建议调整量</th>
+                                <th>调整后目标值</th>
+                                <th>此调整对OK概率的预期贡献</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adjustmentBody"></tbody>
+                    </table>
+                    <div id="finalPrediction" class="mt-3 alert alert-light"></div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
     </div>
-    {% endif %} 
-</div>
 
-<script>
-let lastInputData = null;   // 存储最后一次预测的输入数据 (英文键)
-let lastShapValues = null; // 存储最后一次预测的SHAP值 (与英文键顺序一致)
-let lastPredictionThreshold = null; // 存储最后一次预测使用的阈值
-const fieldLabelsJS = {{ field_labels|tojson }}; // 将Python的FIELD_LABELS传递给JS
+    <script>
+        let lastInputData = null;
+        let lastShapValues = null;
+        let lastPredictionThreshold = null;
+        const fieldLabelsJS = {{ field_labels|tojson }};
 
-document.addEventListener('DOMContentLoaded', function() {
-    var predictForm = document.getElementById('predictForm');
-    if(predictForm) {
-        predictForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            var formData = new FormData(this);
-            
-            document.getElementById('resultsSection').style.display = 'none';
-            document.getElementById('adjustmentCard').style.display = 'none';
-            document.getElementById('adjustBtnContainer').style.display = 'none';
-            document.getElementById('waterfallPlot').innerHTML = '<p class="text-center text-muted">分析中...</p>';
-            document.getElementById('adjustmentBody').innerHTML = '';
-            document.getElementById('finalPrediction').innerHTML = '';
+        document.addEventListener("DOMContentLoaded", function () {
+            var predictForm = document.getElementById("predictForm");
+            if (predictForm) {
+                predictForm.addEventListener("submit", function (e) {
+                    e.preventDefault();
+                    var formData = new FormData(this);
 
-            fetch('/predict', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => {
-                if (!response.ok) { // 更稳健的错误处理
-                    return response.json().then(err => { 
-                        throw new Error(err.error || `HTTP error ${response.status}`); 
-                    }).catch(() => { // 如果连JSON解析都失败
-                        throw new Error(`HTTP error ${response.status} - 响应无法解析`);
-                    });
-                }
-                return response.json();
-            })
-            .then(data => {
-                if(data.error){
-                    alert('分析错误: ' + data.error);
-                    return;
-                }
-                
-                document.getElementById('probValue').textContent = data.prob;
-                const resultLabelEl = document.getElementById('resultLabel');
-                const resultCardHeaderEl = document.getElementById('resultCardHeader');
-                if (data.is_ng) {
-                    resultLabelEl.textContent = '❌ 不合格 (NG)';
-                    resultLabelEl.className = 'text-danger font-weight-bold h4';
-                    resultCardHeaderEl.className = 'card-header bg-danger text-white';
-                    document.getElementById('adjustBtnContainer').style.display = 'block'; // 显示优化建议按钮
-                } else {
-                    resultLabelEl.textContent = '✅ 合格 (OK)';
-                    resultLabelEl.className = 'text-success font-weight-bold h4';
-                    resultCardHeaderEl.className = 'card-header bg-success text-white';
-                    document.getElementById('adjustBtnContainer').style.display = 'none'; // 隐藏优化建议按钮
-                }
-                document.getElementById('currentThresholdValue').textContent = data.threshold;
-                
-                const waterfallPlotEl = document.getElementById('waterfallPlot');
-                if(data.waterfall && data.is_ng){
-                    waterfallPlotEl.innerHTML = 
-                        '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot img-fluid" alt="SHAP Waterfall Plot">';
-                } else if (!data.is_ng) {
-                     waterfallPlotEl.innerHTML = '<p class="text-muted small">预测为合格，通常无需Waterfall图分析细节。</p>';
-                } else { // is_ng is true, but no waterfall
-                    waterfallPlotEl.innerHTML = '<p class="text-muted small">Waterfall图未能生成。</p>';
-                }
-                
-                document.getElementById('resultsSection').style.display = 'block';
-                
-                // 保存用于优化建议的数据
-                lastInputData = data.input_data; // 这是 { '英文特征名': value, ... }
-                lastShapValues = data.shap_values; // 这是 SHAP值的数组，顺序与英文特征名列表一致
-                lastPredictionThreshold = data.threshold;
+                    document.getElementById("resultsSection").style.display = "none";
+                    document.getElementById("adjustmentCard").style.display = "none";
+                    document.getElementById("adjustBtnContainer").style.display = "none";
+                    document.getElementById("waterfallPlot").innerHTML =
+                        '<p class="text-center text-muted">分析中...</p>';
+                    document.getElementById("adjustmentBody").innerHTML = "";
+                    document.getElementById("finalPrediction").innerHTML = "";
 
-            })
-            .catch(function(err) {
-                console.error("Fetch error during /predict:", err);
-                alert('请求失败: ' + err.message + '. 请检查浏览器控制台获取更多信息。');
-                 const resultsSection = document.getElementById('resultsSection');
-                 resultsSection.style.display = 'block'; // 即使出错也显示结果区
-                 resultsSection.innerHTML = `<div class="alert alert-danger mt-3">请求处理失败: ${err.message}</div>`;
-            });
-        });
-    }
+                    fetch("/predict", {
+                        method: "POST",
+                        body: formData,
+                    })
+                        .then((response) => {
+                            if (!response.ok) {
+                                return response.json().then((err) => {
+                                    throw new Error(err.error || `HTTP error ${response.status}`);
+                                });
+                            }
+                            return response.json();
+                        })
+                        .then((data) => {
+                            if (data.error) {
+                                alert("分析错误: " + data.error);
+                                return;
+                            }
+                            document.getElementById("probValue").textContent = data.prob;
+                            const resultLabelEl = document.getElementById("resultLabel");
+                            const resultCardHeaderEl = document.getElementById("resultCardHeader");
+                            if (data.is_ng) {
+                                resultLabelEl.textContent = "❌ 不合格 (NG)";
+                                resultLabelEl.className = "text-danger font-weight-bold h4";
+                                resultCardHeaderEl.className = "card-header bg-danger text-white";
+                                document.getElementById("adjustBtnContainer").style.display = "block";
+                            } else {
+                                resultLabelEl.textContent = "✅ 合格 (OK)";
+                                resultLabelEl.className = "text-success font-weight-bold h4";
+                                resultCardHeaderEl.className = "card-header bg-success text-white";
+                                document.getElementById("adjustBtnContainer").style.display = "none";
+                            }
+                            document.getElementById("currentThresholdValue").textContent = data.threshold;
 
-    var triggerAdjustBtn = document.getElementById('triggerAdjustBtn');
-    if(triggerAdjustBtn) {
-        triggerAdjustBtn.onclick = function() {
-            if(!lastInputData || !lastShapValues || lastPredictionThreshold === null) {
-                alert("无法生成建议：请先成功进行一次单样本预测。");
-                return;
+                            const waterfallPlotEl = document.getElementById("waterfallPlot");
+                            if (data.waterfall && data.is_ng) {
+                                waterfallPlotEl.innerHTML =
+                                    '<img src="data:image/png;base64,' +
+                                    data.waterfall +
+                                    '" class="waterfall-plot img-fluid" alt="SHAP Waterfall Plot">';
+                            } else if (!data.is_ng) {
+                                waterfallPlotEl.innerHTML =
+                                    '<p class="text-muted small">预测为合格，通常无需Waterfall图分析细节。</p>';
+                            } else {
+                                waterfallPlotEl.innerHTML =
+                                    '<p class="text-muted small">Waterfall图未能生成。</p>';
+                            }
+                            document.getElementById("resultsSection").style.display = "block";
+                            lastInputData = data.input_data;
+                            lastShapValues = data.shap_values;
+                            lastPredictionThreshold = data.threshold;
+                        })
+                        .catch(function (err) {
+                            alert(
+                                "请求失败: " +
+                                    err.message +
+                                    ". 请检查浏览器控制台获取更多信息。"
+                            );
+                            const resultsSection = document.getElementById("resultsSection");
+                            resultsSection.style.display = "block";
+                            resultsSection.innerHTML =
+                                '<div class="alert alert-danger mt-3">请求处理失败: ' +
+                                err.message +
+                                "</div>";
+                        });
+                });
             }
-            
-            document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted"><i>正在生成优化建议...</i></td></tr>';
-            document.getElementById('adjustmentCard').style.display = 'block';
-            document.getElementById('targetThresholdForAdjustment').textContent = lastPredictionThreshold;
 
-            fetch('/adjust_single', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    input_data: lastInputData, // 发送 { '英文特征名': value }
-                    shap_values: lastShapValues // 发送 SHAP值数组
-                })
-            })
-            .then(response => {
-                 if (!response.ok) {
-                    return response.json().then(err => { throw new Error(err.error || `HTTP error ${response.status}`); });
-                }
-                return response.json();
-            })
-            .then(data => {
-                if(data.error){
-                    document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger"><strong>建议生成失败:</strong> ' + data.error + '</td></tr>';
-                    document.getElementById('finalPrediction').innerHTML = '';
-                    return;
-                }
-
-                let html = '';
-                let adjustmentIndex = 1;
-                if(data.adjustments && Object.keys(data.adjustments).length > 0){
-                    Object.entries(data.adjustments).forEach(function(entry) {
-                        let featureKeyOriginal = entry[0]; // 后端返回的键是原始英文特征名
-                        let featureDisplayName = fieldLabelsJS[featureKeyOriginal] || featureKeyOriginal; // 从JS中的映射获取中文名
-                        let adjDetails = entry[1];
-                        
-                        html += '<tr>' +
-                            '<td>' + (adjustmentIndex++) + '</td>' +
-                            '<td><strong>' + featureDisplayName + '</strong></td>' +
-                            '<td>' + adjDetails.current_value.toFixed(3) + '</td>' +
-                            '<td class="' + (adjDetails.adjustment >= 0 ? 'positive' : 'negative') + '">' +
-                                (adjDetails.adjustment >= 0 ? '+' : '') + adjDetails.adjustment.toFixed(3) + '</td>' +
-                            '<td>' + adjDetails.new_value.toFixed(3) + '</td>' +
-                            '<td class="' + (adjDetails.expected_gain >= 0 ? 'positive' : 'negative') + '">' +
-                                (adjDetails.expected_gain >= 0 ? '+' : '') + (adjDetails.expected_gain*100).toFixed(1) + '%%</td>' +
-                        '</tr>';
-                    });
-                    
-                    let finalProbText = (data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment !== undefined) ? data.final_prob_after_adjustment.toFixed(3) : 'N/A';
-                    let outcomeText = "仍可能不合格";
-                    let outcomeClass = "text-danger";
-
-                    if (parseFloat(finalProbText) >= lastPredictionThreshold) {
-                        outcomeText = "✅ 预期合格";
-                        outcomeClass = "text-success";
+            var triggerAdjustBtn = document.getElementById("triggerAdjustBtn");
+            if (triggerAdjustBtn) {
+                triggerAdjustBtn.onclick = function () {
+                    if (!lastInputData || !lastShapValues || lastPredictionThreshold === null) {
+                        alert("无法生成建议：请先成功进行一次单样本预测。");
+                        return;
                     }
 
-                    document.getElementById('finalPrediction').innerHTML = 
-                        '<strong>综合以上调整后，预计合格(OK)概率约为:</strong> ' + finalProbText + ' → ' +
-                        '<span class="' + outcomeClass + ' font-weight-bold">' + outcomeText + '</span>';
-                } else {
-                    html = '<tr><td colspan="6" class="text-center text-muted">未能计算出有效的调整建议，或当前已非常接近合格标准。</td></tr>';
-                    document.getElementById('finalPrediction').innerHTML = '';
-                }
-                document.getElementById('adjustmentBody').innerHTML = html;
-            })
-            .catch(function(err) {
-                console.error("Fetch error during /adjust_single:", err);
-                document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">建议生成请求失败: ' + err.message + '</td></tr>';
-                document.getElementById('finalPrediction').innerHTML = '';
-            });
-        };
-    }
-});
-</script>
+                    document.getElementById(
+                        "adjustmentBody"
+                    ).innerHTML =
+                        '<tr><td colspan="6" class="text-center text-muted"><i>正在生成优化建议...</i></td></tr>';
+                    document.getElementById("adjustmentCard").style.display = "block";
+                    document.getElementById("targetThresholdForAdjustment").textContent =
+                        lastPredictionThreshold;
+
+                    fetch("/adjust_single", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            input_data: lastInputData,
+                            shap_values: lastShapValues,
+                        }),
+                    })
+                        .then((response) => {
+                            if (!response.ok) {
+                                return response.json().then((err) => {
+                                    throw new Error(err.error || `HTTP error ${response.status}`);
+                                });
+                            }
+                            return response.json();
+                        })
+                        .then((data) => {
+                            if (data.error) {
+                                document.getElementById(
+                                    "adjustmentBody"
+                                ).innerHTML =
+                                    '<tr><td colspan="6" class="text-center text-danger"><strong>建议生成失败:</strong> ' +
+                                    data.error +
+                                    "</td></tr>";
+                                document.getElementById("finalPrediction").innerHTML = "";
+                                return;
+                            }
+
+                            let html = "";
+                            let adjustmentIndex = 1;
+                            if (data.adjustments && Object.keys(data.adjustments).length > 0) {
+                                Object.entries(data.adjustments).forEach(function (entry) {
+                                    let featureKeyOriginal = entry[0];
+                                    let featureDisplayName =
+                                        fieldLabelsJS[featureKeyOriginal] || featureKeyOriginal;
+                                    let adjDetails = entry[1];
+
+                                    html +=
+                                        "<tr>" +
+                                        "<td>" +
+                                        adjustmentIndex++ +
+                                        "</td>" +
+                                        "<td><strong>" +
+                                        featureDisplayName +
+                                        "</strong></td>" +
+                                        "<td>" +
+                                        adjDetails.current_value.toFixed(3) +
+                                        "</td>" +
+                                        '<td class="' +
+                                        (adjDetails.adjustment >= 0 ? "positive" : "negative") +
+                                        '">' +
+                                        (adjDetails.adjustment >= 0 ? "+" : "") +
+                                        adjDetails.adjustment.toFixed(3) +
+                                        "</td>" +
+                                        "<td>" +
+                                        adjDetails.new_value.toFixed(3) +
+                                        "</td>" +
+                                        '<td class="' +
+                                        (adjDetails.expected_gain >= 0 ? "positive" : "negative") +
+                                        '">' +
+                                        (adjDetails.expected_gain >= 0 ? "+" : "") +
+                                        (adjDetails.expected_gain * 100).toFixed(1) +
+                                        "%%</td>" +
+                                        "</tr>";
+                                });
+
+                                let finalProbText =
+                                    data.final_prob_after_adjustment !== null &&
+                                    data.final_prob_after_adjustment !== undefined
+                                        ? data.final_prob_after_adjustment.toFixed(3)
+                                        : "N/A";
+                                let outcomeText = "仍可能不合格";
+                                let outcomeClass = "text-danger";
+
+                                if (parseFloat(finalProbText) >= lastPredictionThreshold) {
+                                    outcomeText = "✅ 预期合格";
+                                    outcomeClass = "text-success";
+                                }
+
+                                document.getElementById("finalPrediction").innerHTML =
+                                    "<strong>综合以上调整后，预计合格(OK)概率约为:</strong> " +
+                                    finalProbText +
+                                    " → " +
+                                    '<span class="' +
+                                    outcomeClass +
+                                    " font-weight-bold\">" +
+                                    outcomeText +
+                                    "</span>";
+                            } else {
+                                html =
+                                    '<tr><td colspan="6" class="text-center text-muted">未能计算出有效的调整建议，或当前已非常接近合格标准。</td></tr>';
+                                document.getElementById("finalPrediction").innerHTML = "";
+                            }
+                            document.getElementById("adjustmentBody").innerHTML = html;
+                        })
+                        .catch(function (err) {
+                            document.getElementById(
+                                "adjustmentBody"
+                            ).innerHTML =
+                                '<tr><td colspan="6" class="text-center text-danger">建议生成请求失败: ' +
+                                err.message +
+                                "</td></tr>";
+                            document.getElementById("finalPrediction").innerHTML = "";
+                        });
+                };
+            }
+        });
+    </script>
 </body>
 </html>
