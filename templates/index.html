@@ -2,20 +2,22 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>工业质检智能分析系统 - 优化版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工业质检智能分析系统 - 最终优化版</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .waterfall-plot { max-width: 100%; height: auto; }
         .adjustment-table td, .adjustment-table th { vertical-align: middle; font-size: 0.9em; }
-        .positive { color: #28a745 !important; }
-        .negative { color: #dc3545 !important; }
+        .positive { color: #28a745 !important; font-weight: bold; }
+        .negative { color: #dc3545 !important; font-weight: bold; }
         .table-sm th, .table-sm td { padding: 0.4rem; }
         .card-header h5 { margin-bottom: 0; }
     </style>
 </head>
 <body>
 <div class="container mt-4 mb-5">
-    <h2 class="mb-4 text-center">工业质检智能分析系统 - 优化版</h2>
+    <h2 class="mb-4 text-center">工业质检智能分析系统 - 最终优化版</h2>
+    
     <div class="card mb-4">
         <div class="card-header bg-primary text-white">
             <h5>1. 上传训练数据 (CSV格式)</h5>
@@ -41,6 +43,7 @@
             {% endif %}
         </div>
     </div>
+
     {% if show_results %}
     <div class="card mb-4">
         <div class="card-header bg-info text-white">
@@ -49,7 +52,7 @@
         <div class="card-body">
             <div class="row">
                 <div class="col-md-5">
-                    <h6>特征重要性排序:</h6>
+                    <h6>特征重要性排序 (XGBoost Built-in):</h6>
                     {% if feature_plot %}
                         <img src="data:image/png;base64,{{ feature_plot }}" class="img-fluid" alt="特征重要性图">
                     {% else %}
@@ -86,22 +89,22 @@
             </div>
         </div>
     </div>
+
     <div class="card mb-4">
         <div class="card-header bg-warning">
             <h5>3. 单一样本检测与智能优化建议</h5>
         </div>
         <div class="card-body">
-            {% set field_labels = field_labels %}
             <form id="predictForm">
-                {% for feature in form_inputs %}
+                {% for feature_key in form_inputs %} {# 使用 feature_key 迭代，因为 form_inputs 是原始英文名列表 #}
                 <div class="form-group row">
-                    <label class="col-sm-4 col-form-label text-right">{{ field_labels[feature] if feature in field_labels else feature }}:</label>
+                    <label class="col-sm-4 col-form-label text-right">{{ field_labels[feature_key] if feature_key in field_labels else feature_key }}:</label>
                     <div class="col-sm-8">
-                        <input type="number" step="any" class="form-control form-control-sm"
-                               name="{{ feature }}"
-                               value="{{ default_values[feature]|round(3) if default_values[feature] is not none else '' }}"
+                        <input type="number" step="any" class="form-control form-control-sm" 
+                               name="{{ feature_key }}" {# name 属性使用原始英文名，与后端对应 #}
+                               value="{{ default_values[feature_key]|round(3) if default_values[feature_key] is not none else '' }}" 
                                required
-                               placeholder="请输入{{ field_labels[feature] if feature in field_labels else feature }}">
+                               placeholder="请输入“{{ field_labels[feature_key] if feature_key in field_labels else feature_key }}”的值">
                     </div>
                 </div>
                 {% endfor %}
@@ -109,9 +112,10 @@
             </form>
         </div>
     </div>
+
     <div id="resultsSection" style="display:none;">
         <div class="card mb-4">
-            <div id="resultCardHeader" class="card-header text-white">
+            <div id="resultCardHeader" class="card-header text-white"> 
                 <h5 id="resultTitle">检测结果详情</h5>
             </div>
             <div class="card-body">
@@ -120,7 +124,7 @@
                         <h6>基础判定:</h6>
                         <p>预测合格(OK)概率: <strong id="probValue" class="h4"></strong></p>
                         <p>判定结果: <strong id="resultLabel" class="h4"></strong></p>
-                        <p class="text-muted small">当前模型判定阈值: <span id="currentThresholdValue"></span></p>
+                         <p class="text-muted small">当前模型判定阈值: <span id="currentThresholdValue"></span></p>
                     </div>
                     <div class="col-lg-7" id="waterfallPlotContainer">
                         <h6>SHAP Waterfall图 (各特征对“合格”概率的贡献):</h6>
@@ -129,9 +133,11 @@
                 </div>
             </div>
         </div>
-        <div class="text-center mt-3" id="adjustBtnContainer" style="display:none;">
-            <button class="btn btn-info" id="triggerAdjustBtn">生成智能优化建议</button>
+
+        <div class="text-center mt-3 mb-3" id="adjustBtnContainer" style="display:none;">
+            <button class="btn btn-info btn-lg" id="triggerAdjustBtn">获取智能优化建议</button>
         </div>
+
         <div id="adjustmentCard" class="card mb-4" style="display:none;">
             <div class="card-header bg-info text-white">
                 <h5>智能优化建议 (如何使样本合格)</h5>
@@ -142,7 +148,7 @@
                     <thead class="thead-light">
                         <tr>
                             <th>#</th>
-                            <th>待调整特征</th>
+                            <th>待调整特征 (中文名)</th>
                             <th>当前值</th>
                             <th>建议调整量</th>
                             <th>调整后目标值</th>
@@ -156,32 +162,49 @@
             </div>
         </div>
     </div>
-    {% endif %}
+    {% endif %} 
 </div>
+
 <script>
-let lastInputData = null, lastShapValues = null, lastThreshold = null;
+let lastInputData = null;   // 存储最后一次预测的输入数据 (英文键)
+let lastShapValues = null; // 存储最后一次预测的SHAP值 (与英文键顺序一致)
+let lastPredictionThreshold = null; // 存储最后一次预测使用的阈值
+const fieldLabelsJS = {{ field_labels|tojson }}; // 将Python的FIELD_LABELS传递给JS
+
 document.addEventListener('DOMContentLoaded', function() {
     var predictForm = document.getElementById('predictForm');
     if(predictForm) {
         predictForm.addEventListener('submit', function(e) {
             e.preventDefault();
             var formData = new FormData(this);
+            
             document.getElementById('resultsSection').style.display = 'none';
             document.getElementById('adjustmentCard').style.display = 'none';
             document.getElementById('adjustBtnContainer').style.display = 'none';
             document.getElementById('waterfallPlot').innerHTML = '<p class="text-center text-muted">分析中...</p>';
             document.getElementById('adjustmentBody').innerHTML = '';
             document.getElementById('finalPrediction').innerHTML = '';
+
             fetch('/predict', {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) { // 更稳健的错误处理
+                    return response.json().then(err => { 
+                        throw new Error(err.error || `HTTP error ${response.status}`); 
+                    }).catch(() => { // 如果连JSON解析都失败
+                        throw new Error(`HTTP error ${response.status} - 响应无法解析`);
+                    });
+                }
+                return response.json();
+            })
             .then(data => {
                 if(data.error){
                     alert('分析错误: ' + data.error);
                     return;
                 }
+                
                 document.getElementById('probValue').textContent = data.prob;
                 const resultLabelEl = document.getElementById('resultLabel');
                 const resultCardHeaderEl = document.getElementById('resultCardHeader');
@@ -189,94 +212,121 @@ document.addEventListener('DOMContentLoaded', function() {
                     resultLabelEl.textContent = '❌ 不合格 (NG)';
                     resultLabelEl.className = 'text-danger font-weight-bold h4';
                     resultCardHeaderEl.className = 'card-header bg-danger text-white';
-                    document.getElementById('adjustBtnContainer').style.display = '';
+                    document.getElementById('adjustBtnContainer').style.display = 'block'; // 显示优化建议按钮
                 } else {
                     resultLabelEl.textContent = '✅ 合格 (OK)';
                     resultLabelEl.className = 'text-success font-weight-bold h4';
                     resultCardHeaderEl.className = 'card-header bg-success text-white';
-                    document.getElementById('adjustBtnContainer').style.display = 'none';
+                    document.getElementById('adjustBtnContainer').style.display = 'none'; // 隐藏优化建议按钮
                 }
                 document.getElementById('currentThresholdValue').textContent = data.threshold;
+                
                 const waterfallPlotEl = document.getElementById('waterfallPlot');
                 if(data.waterfall && data.is_ng){
                     waterfallPlotEl.innerHTML = 
                         '<img src="data:image/png;base64,' + data.waterfall + '" class="waterfall-plot img-fluid" alt="SHAP Waterfall Plot">';
                 } else if (!data.is_ng) {
-                     waterfallPlotEl.innerHTML = '<p class="text-muted">预测为合格，通常无需Waterfall图分析细节。</p>';
-                } else {
-                    waterfallPlotEl.innerHTML = '<p class="text-muted">Waterfall图未能生成。</p>';
+                     waterfallPlotEl.innerHTML = '<p class="text-muted small">预测为合格，通常无需Waterfall图分析细节。</p>';
+                } else { // is_ng is true, but no waterfall
+                    waterfallPlotEl.innerHTML = '<p class="text-muted small">Waterfall图未能生成。</p>';
                 }
+                
                 document.getElementById('resultsSection').style.display = 'block';
-                lastInputData = data.input_data;
-                lastShapValues = data.shap_values;
-                lastThreshold = data.threshold;
+                
+                // 保存用于优化建议的数据
+                lastInputData = data.input_data; // 这是 { '英文特征名': value, ... }
+                lastShapValues = data.shap_values; // 这是 SHAP值的数组，顺序与英文特征名列表一致
+                lastPredictionThreshold = data.threshold;
+
             })
             .catch(function(err) {
-                alert('请求失败: ' + err.message);
+                console.error("Fetch error during /predict:", err);
+                alert('请求失败: ' + err.message + '. 请检查浏览器控制台获取更多信息。');
+                 const resultsSection = document.getElementById('resultsSection');
+                 resultsSection.style.display = 'block'; // 即使出错也显示结果区
+                 resultsSection.innerHTML = `<div class="alert alert-danger mt-3">请求处理失败: ${err.message}</div>`;
             });
         });
     }
-    document.getElementById('triggerAdjustBtn').onclick = function() {
-        if(!lastInputData || !lastShapValues || !lastThreshold) {
-            alert("请先进行单一样本预测。");
-            return;
-        }
-        document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted">正在生成优化建议...</td></tr>';
-        document.getElementById('adjustmentCard').style.display = 'block';
-        document.getElementById('targetThresholdForAdjustment').textContent = lastThreshold;
-        fetch('/adjust_single', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                input_data: lastInputData,
-                shap_values: lastShapValues
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if(data.error){
-                document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">' + data.error + '</td></tr>';
-                document.getElementById('finalPrediction').innerHTML = '';
+
+    var triggerAdjustBtn = document.getElementById('triggerAdjustBtn');
+    if(triggerAdjustBtn) {
+        triggerAdjustBtn.onclick = function() {
+            if(!lastInputData || !lastShapValues || lastPredictionThreshold === null) {
+                alert("无法生成建议：请先成功进行一次单样本预测。");
                 return;
             }
-            let html = '';
-            let adjustmentIndex = 1;
-            if(data.adjustments && Object.keys(data.adjustments).length > 0){
-                Object.entries(data.adjustments).forEach(function(entry) {
-                    let featureName = entry[0];
-                    let adjDetails = entry[1];
-                    html += '<tr>' +
-                        '<td>' + (adjustmentIndex++) + '</td>' +
-                        '<td><strong>' + featureName + '</strong></td>' +
-                        '<td>' + adjDetails.current_value.toFixed(3) + '</td>' +
-                        '<td class="' + (adjDetails.adjustment >= 0 ? 'positive' : 'negative') + '">' +
-                            (adjDetails.adjustment >= 0 ? '+' : '') + adjDetails.adjustment.toFixed(3) + '</td>' +
-                        '<td>' + adjDetails.new_value.toFixed(3) + '</td>' +
-                        '<td class="' + (adjDetails.expected_gain >= 0 ? 'positive' : 'negative') + '">' +
-                            (adjDetails.expected_gain >= 0 ? '+' : '') + (adjDetails.expected_gain*100).toFixed(1) + '%%</td>' +
-                    '</tr>';
-                });
-                let finalProbText = data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment !== undefined ? data.final_prob_after_adjustment.toFixed(3) : '';
-                let outcomeText = "仍可能不合格";
-                let outcomeClass = "text-danger";
-                if (parseFloat(finalProbText) >= lastThreshold) {
-                    outcomeText = "✅ 预期合格";
-                    outcomeClass = "text-success";
+            
+            document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-muted"><i>正在生成优化建议...</i></td></tr>';
+            document.getElementById('adjustmentCard').style.display = 'block';
+            document.getElementById('targetThresholdForAdjustment').textContent = lastPredictionThreshold;
+
+            fetch('/adjust_single', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    input_data: lastInputData, // 发送 { '英文特征名': value }
+                    shap_values: lastShapValues // 发送 SHAP值数组
+                })
+            })
+            .then(response => {
+                 if (!response.ok) {
+                    return response.json().then(err => { throw new Error(err.error || `HTTP error ${response.status}`); });
                 }
-                document.getElementById('finalPrediction').innerHTML = 
-                    '<strong>综合以上调整后，预计合格(OK)概率约为:</strong> ' + finalProbText + ' → ' +
-                    '<span class="' + outcomeClass + ' font-weight-bold">' + outcomeText + '</span>';
-            } else {
-                html = '<tr><td colspan="6" class="text-center text-muted">未能计算出有效的调整建议，或当前已非常接近合格。</td></tr>';
+                return response.json();
+            })
+            .then(data => {
+                if(data.error){
+                    document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger"><strong>建议生成失败:</strong> ' + data.error + '</td></tr>';
+                    document.getElementById('finalPrediction').innerHTML = '';
+                    return;
+                }
+
+                let html = '';
+                let adjustmentIndex = 1;
+                if(data.adjustments && Object.keys(data.adjustments).length > 0){
+                    Object.entries(data.adjustments).forEach(function(entry) {
+                        let featureKeyOriginal = entry[0]; // 后端返回的键是原始英文特征名
+                        let featureDisplayName = fieldLabelsJS[featureKeyOriginal] || featureKeyOriginal; // 从JS中的映射获取中文名
+                        let adjDetails = entry[1];
+                        
+                        html += '<tr>' +
+                            '<td>' + (adjustmentIndex++) + '</td>' +
+                            '<td><strong>' + featureDisplayName + '</strong></td>' +
+                            '<td>' + adjDetails.current_value.toFixed(3) + '</td>' +
+                            '<td class="' + (adjDetails.adjustment >= 0 ? 'positive' : 'negative') + '">' +
+                                (adjDetails.adjustment >= 0 ? '+' : '') + adjDetails.adjustment.toFixed(3) + '</td>' +
+                            '<td>' + adjDetails.new_value.toFixed(3) + '</td>' +
+                            '<td class="' + (adjDetails.expected_gain >= 0 ? 'positive' : 'negative') + '">' +
+                                (adjDetails.expected_gain >= 0 ? '+' : '') + (adjDetails.expected_gain*100).toFixed(1) + '%%</td>' +
+                        '</tr>';
+                    });
+                    
+                    let finalProbText = (data.final_prob_after_adjustment !== null && data.final_prob_after_adjustment !== undefined) ? data.final_prob_after_adjustment.toFixed(3) : 'N/A';
+                    let outcomeText = "仍可能不合格";
+                    let outcomeClass = "text-danger";
+
+                    if (parseFloat(finalProbText) >= lastPredictionThreshold) {
+                        outcomeText = "✅ 预期合格";
+                        outcomeClass = "text-success";
+                    }
+
+                    document.getElementById('finalPrediction').innerHTML = 
+                        '<strong>综合以上调整后，预计合格(OK)概率约为:</strong> ' + finalProbText + ' → ' +
+                        '<span class="' + outcomeClass + ' font-weight-bold">' + outcomeText + '</span>';
+                } else {
+                    html = '<tr><td colspan="6" class="text-center text-muted">未能计算出有效的调整建议，或当前已非常接近合格标准。</td></tr>';
+                    document.getElementById('finalPrediction').innerHTML = '';
+                }
+                document.getElementById('adjustmentBody').innerHTML = html;
+            })
+            .catch(function(err) {
+                console.error("Fetch error during /adjust_single:", err);
+                document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">建议生成请求失败: ' + err.message + '</td></tr>';
                 document.getElementById('finalPrediction').innerHTML = '';
-            }
-            document.getElementById('adjustmentBody').innerHTML = html;
-        })
-        .catch(function(err) {
-            document.getElementById('adjustmentBody').innerHTML = '<tr><td colspan="6" class="text-center text-danger">请求失败: ' + err.message + '</td></tr>';
-            document.getElementById('finalPrediction').innerHTML = '';
-        });
-    };
+            });
+        };
+    }
 });
 </script>
 </body>
