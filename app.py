@@ -18,7 +18,7 @@ from sklearn.utils.class_weight import compute_sample_weight
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d - %(message)s') # 更详细的日志格式
 app.logger.setLevel(logging.INFO)
 
 FIELD_LABELS = {
@@ -32,7 +32,7 @@ def convert_to_native_python_type(value):
     """辅助函数：将numpy数值类型转换为Python原生类型"""
     if isinstance(value, (np.float32, np.float64)):
         return float(value)
-    elif isinstance(value, (np.int32, np.int64, np.int_)): # 添加 np.int_
+    elif isinstance(value, (np.int32, np.int64, np.int_)): 
         return int(value)
     elif isinstance(value, np.bool_):
         return bool(value)
@@ -49,6 +49,7 @@ def generate_shap_waterfall_base64(shap_explanation_object_with_english_names):
     plt.tight_layout(); return fig_to_base64(fig)
 
 def generate_feature_importance_plot(clf, feature_names_original_english):
+    # ... (与 v12 逻辑一致) ...
     booster = clf.get_booster()
     importance_scores = booster.get_score(importance_type='weight') 
     if not importance_scores:
@@ -62,7 +63,7 @@ def generate_feature_importance_plot(clf, feature_names_original_english):
     if importance_scores and all(isinstance(k, str) and k.startswith('f') and k[1:].isdigit() for k in importance_scores.keys()):
         temp_map = {f"f{i}": name for i, name in enumerate(feature_names_original_english)}
         for f_key, score in importance_scores.items():
-            original_name_candidate = temp_map.get(f_key, f_key) # 如果无法映射，保留f_key
+            original_name_candidate = temp_map.get(f_key, f_key) 
             mapped_importance[original_name_candidate] = score
         if not mapped_importance and importance_scores : mapped_importance = importance_scores
     elif importance_scores: mapped_importance = importance_scores
@@ -73,7 +74,7 @@ def generate_feature_importance_plot(clf, feature_names_original_english):
     num_features_to_display = min(len(sorted_importance), 10)
     top_features_data = sorted_importance[:num_features_to_display]
     feature_labels_for_plot_english = [item[0] for item in top_features_data]
-    scores_for_plot = [float(item[1]) for item in top_features_data] # 确保是原生 float
+    scores_for_plot = [float(item[1]) for item in top_features_data] 
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.barh(range(len(scores_for_plot)), scores_for_plot, align='center')
     ax.set_yticks(range(len(scores_for_plot))); ax.set_yticklabels(feature_labels_for_plot_english, fontsize=9)
@@ -82,15 +83,16 @@ def generate_feature_importance_plot(clf, feature_names_original_english):
     return fig_to_base64(fig)
 
 def find_best_threshold_f1(clf, X, y):
-    probs_ok = clf.predict_proba(X)[:, 1] # numpy array of float64
+    # ... (与 v12 逻辑一致，确保返回原生类型) ...
+    probs_ok = clf.predict_proba(X)[:, 1] 
     best_f1_macro, best_thresh = 0.0, 0.5; best_metrics_at_thresh = {}
     for t_candidate in np.arange(0.01, 1.0, 0.01):
-        t = float(t_candidate) # 确保 t 是原生 float
+        t = float(t_candidate) 
         y_pred = (probs_ok >= t).astype(int)
         f1_macro_current = f1_score(y, y_pred, average='macro', zero_division=0)
         if f1_macro_current > best_f1_macro:
-            best_f1_macro = float(f1_macro_current) # 原生 float
-            best_thresh = t # 已是原生 float
+            best_f1_macro = float(f1_macro_current) 
+            best_thresh = t 
             best_metrics_at_thresh = {
                 'accuracy': float(accuracy_score(y, y_pred)),
                 'recall_ok': float(recall_score(y, y_pred, pos_label=1, zero_division=0)),
@@ -115,27 +117,38 @@ def find_best_threshold_f1(clf, X, y):
             'threshold': float(default_thresh)
         }
         best_thresh = float(default_thresh)
-
     final_threshold = float(best_metrics_at_thresh.get('threshold', best_thresh))
-    # 再次确保所有值都是原生 float
     final_metrics_serializable = {k: float(v) for k, v in best_metrics_at_thresh.items()}
     final_metrics_serializable['threshold'] = final_threshold
-    
     return final_threshold, final_metrics_serializable
 
 def calculate_adjustment_direct_search_v11(clf, current_values_array, shap_values_array, target_ok_prob_original, feature_names, initial_is_ng):
+    # !!! 新增日志，确认传入调整算法的初始参数 !!!
+    app.logger.info(f"调整算法 (v11) 入口：current_values_array={current_values_array.tolist()}, initial_is_ng={initial_is_ng}, target_ok_prob_original={target_ok_prob_original}")
+    # !!! -------------------------------------- !!!
+
     original_values_np = np.array(current_values_array, dtype=float).flatten()
     current_adjusted_values = original_values_np.copy()
     
     initial_prob_ok_np = clf.predict_proba(original_values_np.reshape(1, -1))[0, 1]
-    initial_prob_ok = float(initial_prob_ok_np) # 转原生
-    app.logger.info(f"调整(v11)开始：初始NG={initial_is_ng}, 初始OK概率={initial_prob_ok:.4f}, 原始目标={target_ok_prob_original:.4f}")
+    initial_prob_ok = float(initial_prob_ok_np) 
+    # !!! 修改日志，更清晰地显示这个函数内部计算的初始概率 !!!
+    app.logger.info(f"调整算法 (v11) 内部计算：基于传入 current_values_array 的初始OK概率={initial_prob_ok:.4f}")
+    # !!! ------------------------------------------------- !!!
 
     if not initial_is_ng and initial_prob_ok >= target_ok_prob_original:
+        app.logger.info("调整算法 (v11)：样本已合格或无需调整（根据传入的initial_is_ng和计算的初始概率）。")
         return {}, initial_prob_ok, "样本当前已合格且满足目标概率，无需调整。"
 
+    # 即使 initial_is_ng 为 True，如果传入的 current_values_array 算出来的 initial_prob_ok 已经很高，也可能提前退出
+    # 这是为了处理数据不一致的情况
+    if initial_prob_ok >= (target_ok_prob_original + 0.015) and initial_is_ng: # 如果是NG，但传入值已远超目标
+        app.logger.warning(f"调整算法 (v11) 警告：样本标记为 initial_is_ng=True，但传入的 current_values_array 计算出的初始概率 ({initial_prob_ok:.4f}) 已高于目标 {target_ok_prob_original + 0.015:.4f}。可能数据传递有误。不进行调整。")
+        return {}, initial_prob_ok, f"样本虽初标记为NG，但根据接收到的参数，其OK概率({initial_prob_ok:.4f})已远超目标，无需调整。请检查数据一致性。"
+
+
     effective_target_prob = min(target_ok_prob_original + 0.015, 0.999)
-    app.logger.info(f"内部调整目标概率设为: {effective_target_prob:.4f}")
+    app.logger.info(f"调整算法 (v11) 内部调整目标概率设为: {effective_target_prob:.4f}")
 
     max_total_iterations = 150
     max_abs_change_ratio_from_original = 10.0 
@@ -148,11 +161,11 @@ def calculate_adjustment_direct_search_v11(clf, current_values_array, shap_value
     
     for iteration_count in range(max_total_iterations):
         prob_at_iter_start_np = clf.predict_proba(current_adjusted_values.reshape(1, -1))[0, 1]
-        prob_at_iter_start = float(prob_at_iter_start_np) # 转原生
-        app.logger.info(f"第 {iteration_count + 1} 轮迭代开始，当前OK概率: {prob_at_iter_start:.4f}")
+        prob_at_iter_start = float(prob_at_iter_start_np) 
+        # app.logger.info(f"第 {iteration_count + 1} 轮迭代开始，当前OK概率: {prob_at_iter_start:.4f}") # 日志已在下面更详细
 
         if prob_at_iter_start >= effective_target_prob:
-            app.logger.info(f"已达到目标概率 {effective_target_prob:.4f}。")
+            app.logger.info(f"第 {iteration_count + 1} 轮：已达到目标概率 {effective_target_prob:.4f}。")
             break
 
         best_move_info = {
@@ -160,9 +173,10 @@ def calculate_adjustment_direct_search_v11(clf, current_values_array, shap_value
             'new_prob': prob_at_iter_start, 'prob_gain': -1.0 
         }
 
+        # ... (内部的特征遍历和调整尝试逻辑与 v12 保持一致，确保所有数值都是原生float) ...
         for feature_idx in range(len(feature_names)):
-            original_feature_value = float(original_values_np[feature_idx]) # 原生
-            current_feature_val_for_test = float(current_adjusted_values[feature_idx]) # 原生
+            original_feature_value = float(original_values_np[feature_idx]) 
+            current_feature_val_for_test = float(current_adjusted_values[feature_idx]) 
             lower_overall_bound = original_feature_value - abs(original_feature_value * max_abs_change_ratio_from_original) \
                                 if original_feature_value != 0 else -abs_change_limit_for_zero_original
             upper_overall_bound = original_feature_value + abs(original_feature_value * max_abs_change_ratio_from_original) \
@@ -173,32 +187,34 @@ def calculate_adjustment_direct_search_v11(clf, current_values_array, shap_value
             for direction_multiplier in [1, -1]:
                 potential_change = direction_multiplier * step_val
                 new_val_candidate = current_feature_val_for_test + potential_change
-                new_val_clipped = float(np.clip(new_val_candidate, lower_overall_bound, upper_overall_bound)) # 原生
+                new_val_clipped = float(np.clip(new_val_candidate, lower_overall_bound, upper_overall_bound)) 
                 actual_change_to_test = new_val_clipped - current_feature_val_for_test
                 if abs(actual_change_to_test) < 1e-9: continue
                 
                 temp_adjusted_values_for_test = current_adjusted_values.copy()
-                temp_adjusted_values_for_test[feature_idx] = new_val_clipped # 应用试探调整
+                temp_adjusted_values_for_test[feature_idx] = new_val_clipped
                 
                 prob_after_test_step_np = clf.predict_proba(temp_adjusted_values_for_test.reshape(1, -1))[0, 1]
-                prob_after_test_step = float(prob_after_test_step_np) # 原生
-                prob_gain_from_test_step = prob_after_test_step - prob_at_iter_start # 原生float运算
+                prob_after_test_step = float(prob_after_test_step_np) 
+                prob_gain_from_test_step = prob_after_test_step - prob_at_iter_start 
 
                 if prob_gain_from_test_step > best_move_info['prob_gain']:
                     best_move_info.update({
-                        'feature_idx': feature_idx, 'applied_change': actual_change_to_test, # 原生
-                        'new_prob': prob_after_test_step, # 原生
-                        'prob_gain': prob_gain_from_test_step # 原生
+                        'feature_idx': feature_idx, 'applied_change': actual_change_to_test, 
+                        'new_prob': prob_after_test_step, 
+                        'prob_gain': prob_gain_from_test_step 
                     })
         
         if best_move_info['prob_gain'] > min_significant_prob_gain_for_best_step:
             best_feature_idx = best_move_info['feature_idx']
-            change_to_apply = float(best_move_info['applied_change']) # 原生
+            change_to_apply = float(best_move_info['applied_change']) 
             feature_name_adjusted = feature_names[best_feature_idx]
             
-            current_adjusted_values[best_feature_idx] += change_to_apply # NumPy array 修改
+            current_adjusted_values[best_feature_idx] += change_to_apply
             
-            app.logger.info(f"  应用调整: 特征 '{feature_name_adjusted}' 改变 {change_to_apply:+.4f}, 新值为 {float(current_adjusted_values[best_feature_idx]):.4f}. OK概率从 {prob_at_iter_start:.4f} 变为 {float(best_move_info['new_prob']):.4f} (增益: {float(best_move_info['prob_gain']):.4f})")
+            app.logger.info(f"  第 {iteration_count + 1} 轮应用调整: 特征 '{feature_name_adjusted}' "
+                            f"改变 {change_to_apply:+.4f}, 新值为 {float(current_adjusted_values[best_feature_idx]):.4f}."
+                            f" OK概率从 {prob_at_iter_start:.4f} 变为 {float(best_move_info['new_prob']):.4f} (增益: {float(best_move_info['prob_gain']):.4f})")
             
             cumulative_adjustments_made[feature_name_adjusted] = {
                 'current_value': float(original_values_np[best_feature_idx]),
@@ -211,23 +227,23 @@ def calculate_adjustment_direct_search_v11(clf, current_values_array, shap_value
             break
             
     final_prob_ok_overall_np = clf.predict_proba(current_adjusted_values.reshape(1, -1))[0, 1]
-    final_prob_ok_overall = float(final_prob_ok_overall_np) # 原生
-    app.logger.info(f"调整(v11)结束：最终OK概率={final_prob_ok_overall:.4f} (迭代次数: {iteration_count + 1})")
+    final_prob_ok_overall = float(final_prob_ok_overall_np)
+    app.logger.info(f"调整算法(v11)结束：最终OK概率={final_prob_ok_overall:.4f} (迭代次数: {iteration_count + 1})")
     
     message_to_user = ""
+    # ... (消息逻辑与 v12 一致, 确保所有format中的值都是原生float) ...
     if final_prob_ok_overall >= effective_target_prob:
-        message_to_user = f"调整建议已生成。调整后样本预测合格概率为: {final_prob_ok_overall:.4f} (目标: ≥{target_ok_prob_original:.3f})。"
+        message_to_user = f"调整建议已生成。调整后样本预测合格概率为: {final_prob_ok_overall:.4f} (原始目标: ≥{target_ok_prob_original:.3f})。"
         if not cumulative_adjustments_made and initial_is_ng : 
-             message_to_user = f"样本虽初判为NG（初始概率 {initial_prob_ok:.4f}），但其概率已满足或超过调整目标 {effective_target_prob:.4f}，无需特定参数调整。"
+             message_to_user = f"样本虽初判为NG（算法接收到的初始概率 {initial_prob_ok:.4f}），但其概率已满足或超过内部调整目标 {effective_target_prob:.4f}，无需特定参数调整。请核对数据传递是否准确。"
     else: 
         message_to_user = f"已尝试在极大范围内调整特征（共 {iteration_count + 1} 轮迭代）。"
         if cumulative_adjustments_made:
-             message_to_user += f"调整后样本预测合格概率为: {final_prob_ok_overall:.4f}，但仍未达到目标 {target_ok_prob_original:.3f}。"
+             message_to_user += f"调整后样本预测合格概率为: {final_prob_ok_overall:.4f}，但仍未达到内部调整目标 {effective_target_prob:.4f} (原始目标: {target_ok_prob_original:.3f})。"
         else:
-             message_to_user += f"未能找到任何有效的调整组合使样本达到合格标准（当前实际概率 {initial_prob_ok:.4f}，目标 {target_ok_prob_original:.3f}）。"
+             message_to_user += f"未能找到任何有效的调整组合使样本达到合格标准（算法接收到的初始概率 {initial_prob_ok:.4f}，原始目标 {target_ok_prob_original:.3f}）。"
         message_to_user += " 这可能表示：1. 模型对此特定NG样本的判定非常“顽固”。2. 所有特征的调整对于提升合格概率的效果都非常有限。建议：请人工复核此样本的实际情况，或考虑在训练数据中补充更多此类“边界”样本后重新训练模型。"
 
-    # 最终确保返回字典中的所有值都是Python原生类型
     final_adjustments_serializable = {}
     for fname, details in cumulative_adjustments_made.items():
         final_adjustments_serializable[fname] = {
@@ -236,28 +252,25 @@ def calculate_adjustment_direct_search_v11(clf, current_values_array, shap_value
             'new_value': float(details['new_value']),
             'expected_gain_this_step': float(details['expected_gain_this_step'])
         }
-
     return final_adjustments_serializable, final_prob_ok_overall, message_to_user
 
 # --- Flask Routes ---
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def index():
+    # ... (与 v12 GET/POST 逻辑一致, 确保 model_cache 存取时类型正确) ...
     global model_cache
     if request.method == 'HEAD': return make_response('', 200)
     if request.method == 'GET':
         metrics_from_cache = model_cache.get('metrics', {})
         metrics_serializable = {k: convert_to_native_python_type(v) for k, v in metrics_from_cache.items()}
-        
         default_metrics = {
             'threshold': 0.5, 'accuracy': 0.0, 'recall_ok': 0.0, 'recall_ng': 0.0, 
             'precision_ok': 0.0, 'precision_ng': 0.0, 'f1_ok': 0.0, 'f1_ng': 0.0,
             'trees': 'N/A', 'depth': 'N/A', 'lr': 'N/A'
         }
-        final_metrics = {**default_metrics, **metrics_serializable} # 使用序列化后的
-
+        final_metrics = {**default_metrics, **metrics_serializable} 
         defaults_from_cache = model_cache.get('defaults', {})
         defaults_serializable = {k: convert_to_native_python_type(v) for k,v in defaults_from_cache.items()}
-
         return render_template('index.html',
             show_results=bool(model_cache.get('show_results', False)), filename=model_cache.get('filename', ''),
             form_inputs=model_cache.get('features', []), default_values=defaults_serializable, 
@@ -288,20 +301,15 @@ def index():
             )
             sample_weights = compute_sample_weight(class_weight={0:2.0, 1:1.0}, y=y) 
             clf.fit(X, y, sample_weight=sample_weights)
-            
-            # find_best_threshold_f1 已经返回了 serializable metrics
             best_threshold, calculated_metrics_serializable = find_best_threshold_f1(clf, X, y) 
-            
             model_params = clf.get_params()
             final_model_metrics_serializable = {
                 'trees': int(model_params['n_estimators']), 
                 'depth': int(model_params['max_depth']),
                 'lr': float(model_params['learning_rate']), 
-                **calculated_metrics_serializable # 直接使用序列化后的
+                **calculated_metrics_serializable 
             }
-            
             defaults_for_cache_serializable = {k: float(v) for k, v in X.mean().to_dict().items()}
-
             model_cache.update({
                 'show_results': True, 'features': features,
                 'defaults': defaults_for_cache_serializable, 
@@ -315,17 +323,15 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    # ... (与 v12 逻辑一致, 确保返回原生类型) ...
     global model_cache
     if 'clf' not in model_cache: return jsonify({'error': '请先上传并训练模型。'}), 400
     try:
         clf = model_cache['clf']; features = model_cache['features']
-        
-        # model_cache['metrics'] 已经是序列化后的
         metrics_serializable = model_cache['metrics']
         threshold = metrics_serializable['threshold'] 
-        
         input_data_dict = {}
-        for f_name in features: # 用户输入已经是原生 float
+        for f_name in features: 
             val_str = request.form.get(f_name)
             if val_str is None or val_str.strip() == '': return jsonify({'error': f'特征 "{FIELD_LABELS.get(f_name, f_name)}" 的值不能为空。'}), 400
             try: input_data_dict[f_name] = float(val_str) 
@@ -333,22 +339,26 @@ def predict():
         
         df_input = pd.DataFrame([input_data_dict], columns=features)
         prob_ok_np = clf.predict_proba(df_input)[0, 1] 
-        prob_ok = float(prob_ok_np) # 转原生
-        is_ng = bool(prob_ok < threshold) # threshold 已是原生
+        prob_ok = float(prob_ok_np) 
+        is_ng = bool(prob_ok < threshold)
+        
+        # !!! 新增日志，记录 predict 时的输入和概率 !!!
+        app.logger.info(f"/predict: input_data_dict={input_data_dict}, calculated_prob_ok={prob_ok:.4f}, threshold={threshold:.4f}, is_ng={is_ng}")
+        # !!! -------------------------------------- !!!
         
         background_data_df = model_cache['X_train_df']
-        explainer = shap.Explainer(clf, background_data_df)
-        shap_explanation_obj = explainer(df_input)
+        explainer = shap.Explainer(clf, background_data_df) 
+        shap_explanation_obj = explainer(df_input) 
         shap_values_for_output_np = shap_explanation_obj.values[0]
-        shap_values_for_output = [float(v) for v in shap_values_for_output_np] # 转原生列表
+        shap_values_for_output = [float(v) for v in shap_values_for_output_np] 
 
         base_val_for_waterfall_np = explainer.expected_value
         if isinstance(base_val_for_waterfall_np, (np.ndarray, list)):
              base_val_for_waterfall_np = base_val_for_waterfall_np[1] if len(base_val_for_waterfall_np) == 2 and hasattr(clf, 'n_classes_') and clf.n_classes_ == 2 else base_val_for_waterfall_np[0]
-        base_val_for_waterfall = float(base_val_for_waterfall_np) # 转原生
+        base_val_for_waterfall = float(base_val_for_waterfall_np) 
 
         shap_explanation_for_plot = shap.Explanation(
-            values=np.array(shap_values_for_output, dtype=float), # SHAP库可能仍需要numpy array，但确保元素是float
+            values=np.array(shap_values_for_output, dtype=float), 
             base_values=base_val_for_waterfall,
             data=df_input.iloc[0].values.astype(float), 
             feature_names=features
@@ -372,32 +382,51 @@ def predict():
 
 @app.route('/adjust_single', methods=['POST'])
 def adjust_single():
+    # ... (与 v12 逻辑一致, 但增加了日志打印) ...
     global model_cache
     if 'clf' not in model_cache: return jsonify({'error': '请先上传并训练模型。'}), 400
     try:
         clf = model_cache['clf']; features = model_cache['features']
-        threshold = model_cache['metrics']['threshold'] # 已经是原生float
+        threshold = model_cache['metrics']['threshold'] 
         
         json_data = request.get_json()
         if not json_data: return jsonify({'error': '请求体为空或不是有效的JSON。'}), 400
-        input_data_dict = json_data.get('input_data') # 已经是原生float
-        shap_values_list = json_data.get('shap_values') # 已经是原生float列表
+        
+        input_data_dict = json_data.get('input_data')
+        # !!! 新增日志，打印 /adjust_single 接收到的 input_data_dict !!!
+        app.logger.info(f"/adjust_single 接收到的 input_data_dict (来自前端lastInputData): {input_data_dict}")
+        # !!! ------------------------------------------------------ !!!
+        
+        shap_values_list = json_data.get('shap_values')
         initial_is_ng = json_data.get('initial_is_ng_for_adjustment', True)
         
         if not input_data_dict or not isinstance(input_data_dict, dict): return jsonify({'error': '缺少或无效的 input_data。'}), 400
         if not shap_values_list or not isinstance(shap_values_list, list) or len(shap_values_list) != len(features): return jsonify({'error': '缺少或无效的 shap_values。'}), 400
         
-        current_values_np_array = np.array(list(input_data_dict.values()), dtype=float) # 从字典取值确保顺序
+        # 构建 current_values_np_array 时，确保顺序与 features 一致
+        current_values_list_ordered = []
+        for feature_name in features: # 确保按模型训练时的特征顺序
+            if feature_name in input_data_dict:
+                current_values_list_ordered.append(input_data_dict[feature_name])
+            else: # 如果某个特征缺失，则可能需要报错或使用默认值
+                app.logger.error(f"错误：特征 '{feature_name}' 在 input_data_dict 中缺失！")
+                # 可以选择抛出错误，或尝试从 model_cache['defaults'] 获取（如果存在）
+                # 这里简单处理为使用0，但实际应更鲁棒
+                default_val_for_missing = model_cache.get('defaults', {}).get(feature_name, 0.0)
+                current_values_list_ordered.append(default_val_for_missing)
+                app.logger.warning(f"特征 '{feature_name}' 缺失，使用默认值/0 ({default_val_for_missing}) 代替。")
+
+
+        current_values_np_array = np.array(current_values_list_ordered, dtype=float)
         shap_values_np_array = np.array(shap_values_list, dtype=float)
         
         adjustments, final_prob_after_adjustment, message = calculate_adjustment_direct_search_v11(
             clf, current_values_np_array, shap_values_np_array, threshold, features, initial_is_ng
         )
-        # calculate_adjustment_direct_search_v11 内部已确保返回的 adjustments 和 final_prob_after_adjustment 是原生类型
         
         return jsonify({
             'adjustments': adjustments, 
-            'final_prob_after_adjustment': final_prob_after_adjustment, # 已是原生float
+            'final_prob_after_adjustment': final_prob_after_adjustment, 
             'message': message 
         })
     except Exception as e:
@@ -409,3 +438,4 @@ def adjust_single():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000)) 
     app.run(host='0.0.0.0', port=port, debug=False)
+
